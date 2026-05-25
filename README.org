@@ -1,0 +1,344 @@
+#+title: chrome-server
+#+author: Daniel M. German
+
+A local HTTP server that receives requests from a Chrome extension and
+dispatches them to Emacs actions such as org-capture, org-roam capture,
+eww browsing, web page archiving, and ChatGPT conversation saving.
+
+* Overview
+
+=chrome-server= starts a lightweight HTTP server (via =simple-httpd=) on
+=localhost:9129=. A companion Chrome extension — =emacsProtocol2= — sends JSON
+requests to it when you invoke actions from the browser context menu or popup.
+
+* Module structure
+
+| File                        | Purpose                                              |
+|-----------------------------+------------------------------------------------------|
+| =chrome-server.el=          | Core: server lifecycle, shared helpers, org-capture, org-roam-capture, eww |
+| =chrome-server-chatgpt.el=  | Backend for =/chatgpt=: saves ChatGPT conversations  |
+| =chrome-server-www.el=      | Backend for =/save-page=: archives web pages         |
+| =chrome-server-youtube.el=  | Backend for =/youtube=: captures YouTube videos into =videos.org= |
+
+* Requirements
+
+- [[https://github.com/skeeto/simple-httpd][simple-httpd]] (installed via =use-package=)
+- =pandoc= on your =$PATH= (for HTML → org conversion)
+- =org-roam= (for capture endpoints)
+- The =emacsProtocol2= Chrome extension loaded in your browser
+
+* Installation
+
+The server is loaded and started automatically via =dmg-ai.org=:
+
+#+begin_src emacs-lisp
+(use-package chrome-server
+  :straight nil
+  :load-path "~/.emacs.d/modules/chrome-server"
+  :after simple-httpd
+  :config
+  (chrome-server-start))
+
+(use-package chrome-server-chatgpt
+  :straight nil
+  :load-path "~/.emacs.d/modules/chrome-server"
+  :after chrome-server)
+
+(use-package chrome-server-www
+  :straight nil
+  :load-path "~/.emacs.d/modules/chrome-server"
+  :after chrome-server)
+
+(use-package chrome-server-youtube
+  :straight nil
+  :load-path "~/.emacs.d/modules/chrome-server"
+  :after chrome-server)
+#+end_src
+
+To start or stop the server manually:
+
+#+begin_src emacs-lisp
+(chrome-server-start)
+(chrome-server-stop)
+#+end_src
+
+* Endpoints
+
+| Endpoint                  | File                       | Description                                              |
+|---------------------------+----------------------------+----------------------------------------------------------|
+| =POST /org-capture=       | =chrome-server.el=         | Opens org-capture with configurable template key         |
+| =POST /org-roam-capture=  | =chrome-server.el=         | Opens org-roam-capture with interactive template selection |
+| =POST /eww=               | =chrome-server.el=         | Opens the URL in eww                                     |
+| =POST /save-page=         | =chrome-server-www.el=     | Saves main page content to =~/sync/www-archive/=         |
+| =POST /youtube=           | =chrome-server-youtube.el= | Captures a YouTube video into =videos.org=               |
+| =POST /chatgpt=           | =chrome-server-chatgpt.el= | Saves a ChatGPT conversation to =~/sync/chatgpt/=        |
+
+All endpoints expect:
+
+#+begin_src json
+{ "version": 1, "payload": { ... } }
+#+end_src
+
+** =/org-capture= and =/org-roam-capture= payload
+
+#+begin_src json
+{ "url": "https://...", "title": "Page title", "text": "Selected text", "raise": true }
+#+end_src
+
+** =/eww= payload
+
+#+begin_src json
+{ "url": "https://...", "raise": true }
+#+end_src
+
+** =/save-page= payload
+
+The extension extracts the main content area (=<main>=, =<article>=,
+=[role=main]=, or =<body>=) and sends:
+
+#+begin_src json
+{ "url": "https://...", "title": "Page title", "html": "<p>...</p>", "raise": false }
+#+end_src
+
+** =/youtube= payload
+
+#+begin_src json
+{ "url": "https://www.youtube.com/watch?v=...", "title": "Video title", "text": "Selected text", "raise": false }
+#+end_src
+
+The action calls =dmg-www-video-for-later= (defined in =dmg-www.org=), which fetches
+metadata via the YouTube oEmbed and Data APIs, then captures the entry into =videos.org=.
+
+** =/chatgpt= payload
+
+#+begin_src json
+{
+  "url": "https://chatgpt.com/c/<id>",
+  "title": "Conversation title",
+  "raise": false,
+  "turns": [
+    { "role": "user",      "html": "<p>...</p>", "text": "..." },
+    { "role": "assistant", "html": "<p>...</p>", "text": "..." }
+  ]
+}
+#+end_src
+
+** The =raise= field
+
+Every payload may include a boolean =raise= field. When =true=, Emacs
+raises its window and steals focus after handling the request. The
+default per action is configured in the extension's Options page.
+
+* Saved file formats
+
+** Web page archive (=/save-page=)
+
+Files are saved to =~/sync/www-archive/= (configurable via
+=chrome-server-www-archive-dir=). Each saved page gets its own directory:
+
+#+begin_example
+~/sync/www-archive/
+  20260523-115058-<sanitized-title>/
+    20260523-115058-<sanitized-title>.org
+    20260523-115058-<sanitized-title>.html
+    image1.png
+    image2.jpg
+    ...
+#+end_example
+
+The =.org= file starts with:
+
+#+begin_example
+#+title: <page title>
+#+source_url: <url>
+#+created: <timestamp>
+
+[[<url>][<title>]]
+
+<pandoc-converted body>
+#+end_example
+
+A new directory is always created (web pages have no stable identifier).
+
+** ChatGPT conversations (=/chatgpt=)
+
+Conversations are saved to =~/sync/chatgpt/= (configurable via
+=chrome-server-chatgpt-dir=). Each conversation gets its own directory:
+
+#+begin_example
+~/sync/chatgpt/
+  20260523-115058-<conversation-id>-<sanitized-title>/
+    20260523-115058-<conversation-id>-<sanitized-title>.org
+    20260523-115058-<conversation-id>-<sanitized-title>.html
+    image1.png
+    ...
+#+end_example
+
+Capturing the same conversation a second time refreshes the existing
+directory rather than creating a new one (matched by conversation ID).
+
+User turns become =**= headings (first 100 characters; full text in
+body if truncated). Assistant turns are plain body text.
+
+In both cases, HTML is converted to org via =pandoc=. Embedded images
+(including data URIs) are extracted to the same directory via pandoc's
+=--extract-media= flag. Invisible HTML anchors that pandoc emits as
+=<<target>>= radio targets are stripped automatically.
+
+* Configuration
+
+| Variable                            | Default              | Description                                         |
+|-------------------------------------+----------------------+-----------------------------------------------------|
+| =chrome-server-port=                | =9129=               | Port the server listens on                          |
+| =chrome-server-org-capture-key=     | =nil=                | Org-capture key for =/org-capture=; nil = interactive |
+| =chrome-server-chatgpt-dir=         | =~/sync/chatgpt=     | Directory for saved ChatGPT conversations           |
+| =chrome-server-www-archive-dir=     | =~/sync/www-archive= | Directory for saved web pages                       |
+| =chrome-server-pandoc-executable=   | =pandoc=             | Path to the pandoc binary                           |
+
+Example: pin =/org-capture= to a specific template and keep pandoc in a
+non-standard location:
+
+#+begin_src emacs-lisp
+(setq chrome-server-org-capture-key "w"
+      chrome-server-pandoc-executable "/opt/homebrew/bin/pandoc")
+#+end_src
+
+* Adding new handlers
+
+A handler is a pair: a =defservlet= that registers the HTTP endpoint and a
+=defun= that performs the Emacs-side action.
+
+=defservlet= is a macro from =simple-httpd=. The name becomes the URL path
+automatically — =(defservlet foo ...)= handles =POST /foo=. The servlet
+should parse the request, send a response immediately, then defer any
+interactive work with =run-at-time= so the HTTP response is not blocked.
+
+The pattern used throughout this package (=chrome-server--org-roam-capture=
+is a minimal reference example):
+
+#+begin_src emacs-lisp
+;; 1. Register the endpoint.
+(defservlet my-endpoint application/json (path query request)
+  (condition-case err
+      (let* ((data    (chrome-server--parse-request request))
+             (payload (plist-get data :payload)))
+        (unless payload
+          (error "chrome-server: missing 'payload' key in request"))
+        (chrome-server--respond 200 "ok" "Action started")
+        ;; Defer interactive work — the HTTP response must be sent first.
+        (run-at-time 0 nil #'chrome-server--my-action payload))
+    (error
+     (chrome-server--respond 500 "error" (error-message-string err)))))
+
+;; 2. Implement the action.
+(defun chrome-server--my-action (payload)
+  (let ((url   (plist-get payload :url))
+        (title (plist-get payload :title)))
+    (chrome-server--maybe-raise payload)
+    ;; ... do something in Emacs ...
+    ))
+#+end_src
+
+Call =(chrome-server--maybe-raise payload)= in the action function if
+the action should optionally focus Emacs (respects the =raise= field).
+
+For a backend specific to one site or use-case (like
+=chrome-server-chatgpt.el=), create a new file in
+=modules/chrome-server/=, =(require 'chrome-server)= at the top, and
+load it with a separate =use-package= block in =dmg-ai.org=.
+
+* Debugging a new endpoint
+
+** Reload without restarting Emacs
+
+After editing a handler file, reload it with:
+
+#+begin_src bash
+emacsclient -e '(load-file "~/.emacs.d/modules/chrome-server/chrome-server-www.el")'
+#+end_src
+
+** Test with curl
+
+Use =curl= to send a POST request directly, without involving the Chrome
+extension. This lets you isolate Emacs-side problems from extension problems.
+
+Minimal request:
+
+#+begin_src bash
+curl -s -X POST http://localhost:9129/my-endpoint \
+  -H "Content-Type: application/json" \
+  -d '{"version":1,"payload":{"url":"https://example.com","title":"Test","raise":false}}'
+#+end_src
+
+A successful response:
+
+#+begin_src json
+{"status":"ok","message":"...","data":"null"}
+#+end_src
+
+An error response:
+
+#+begin_src json
+{"status":"error","message":"chrome-server: ...","data":"null"}
+#+end_src
+
+** Check the Emacs message log
+
+Error details and warnings from =message= calls appear in the =*Messages*=
+buffer. Open it with =M-x view-echo-area-messages= or =C-h e=.
+
+** Isolate extension vs. server problems
+
+If =curl= succeeds but the extension fails, the problem is in the JavaScript
+side — check the browser console on the relevant tab and the background service
+worker console at =chrome://extensions= → /Inspect views: service worker/.
+
+If =curl= also fails, the problem is in =chrome-server.el= or the backend file.
+
+* Chrome extension (=emacsProtocol2=)
+
+The extension lives at =~/.emacs.d/../git.dmg/chrome-extensions/emacsProtocol2/=.
+Load it in Chrome via =chrome://extensions= → /Load unpacked/.
+
+** Popup
+
+Clicking the toolbar icon opens a popup with three sections:
+
+- *Capture* — org-capture from page / selection; org-roam-capture from page / selection
+- *Page* — open in eww; save page to archive
+- *ChatGPT* — save conversation (only enabled on =chatgpt.com=)
+
+** Context menu
+
+Right-clicking any page shows:
+
+| Item                                        | Endpoint           | Trigger    |
+|---------------------------------------------+--------------------+------------|
+| /Emacs: org-capture from selection/         | =/org-capture=     | selection  |
+| /Emacs: org-roam-capture from selection/    | =/org-roam-capture= | selection  |
+| /Emacs: open in eww/                        | =/eww=             | page       |
+| /Emacs: save page/                          | =/save-page=       | page       |
+| /Emacs: save ChatGPT conversation/          | =/chatgpt=         | page (chatgpt.com only) |
+| /Emacs: add video for later/                | =/youtube=         | page (youtube.com / youtu.be only) |
+
+Custom endpoints added via the Options page also appear in the context menu.
+
+** Options page
+
+Open via =chrome://extensions= → /Emacs Protocol/ → /Details/ → /Extension options/,
+or right-click the toolbar icon → /Options/.
+
+- *Built-in Actions table* — toggle the /Raise Emacs/ default for each built-in action.
+- *Custom Endpoints* — add endpoints with label, server path, source
+  (=selection=, =full page=, or =URL only=), and raise default. Custom
+  endpoints appear in the context menu automatically.
+
+** Badge feedback
+
+After every action the extension toolbar icon shows a brief badge:
+
+- Green =✓= — Emacs acknowledged the request successfully.
+- Red =!= + desktop notification — an error occurred (e.g. server not
+  running, pandoc failed).
+
+The badge disappears after 3 seconds (errors stay for 5 seconds).
