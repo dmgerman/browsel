@@ -26,6 +26,9 @@ Connected to Connecting and back.  Setup for each side is below.
 Security has been a major concern in the design of this module. Please see [[*Security][Security]] below
 for more information.
 
+=chrome-server= was inspired by [[https://github.com/bitspook/spookfox][spookfox]], a similar Emacs/Firefox integration. The protocol and handler-registry pattern
+are adapted from it.  =chrome-server= targets Chrome rather than Firefox. Its other major enhancement is that it provides
+two-way communication: Emacs can Chrome handlers, and Chrome can invoking Emacs handlers.
 
 For implementation details — adding new actions, the wire protocol,
 the JSON schemas — see =CONTRIBUTING.org=.
