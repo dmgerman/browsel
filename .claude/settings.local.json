@@ -24,7 +24,8 @@
       "Bash(python3 *)",
       "Bash(git ls-tree *)",
       "Bash(make help *)",
-      "Bash(make)"
+      "Bash(make)",
+      "Bash(xargs -I '{}' sh -c 'h=$\\(echo {} | cut -d'\\\\'' '\\\\'' -f1\\); n=$\\(git show $h -- README.org 2>/dev/null | grep -cE '\\\\''^-[ ,]*#\\\\+begin_src chrome-js'\\\\''\\); m=$\\(git show $h -- README.org 2>/dev/null | grep -cE '\\\\''^-#\\\\+begin_example'\\\\''\\); if [ $n -gt 0 ] || [ $m -gt 0 ]; then echo \"$h removed=$n+$m  msg=$\\(git log -1 --format=%s $h\\)\"; fi')"
     ]
   }
 }

@@ -277,42 +277,52 @@ document.querySelector('video').currentTime
 
 *Pause playback and report the new state:*
 
-,#+begin_src chrome-js
+#+begin_example
+# +begin_src chrome-js
 const v = document.querySelector('video');
 v.pause();
 ({ paused: v.paused, at: v.currentTime })
-,#+end_src
+# +end_src
+#+end_example
 
 *Collect several page properties into one object:*
 
-,#+begin_src chrome-js
+#+begin_example
+# +begin_src chrome-js
 ({ url: location.href,
    title: document.title,
    selection: getSelection().toString(),
    linkCount: document.links.length })
-,#+end_src
+# +end_src
+#+end_example
 
 *Run an =async= function and return its resolved value* (the babel
 backend awaits the returned promise):
 
-,#+begin_src chrome-js
+#+begin_example
+# +begin_src chrome-js
 (async () => {
   const r = await fetch(location.href);
   return { status: r.status, length: (await r.text()).length };
 })()
-,#+end_src
+# +end_src
+#+end_example
 
 *Run in a specific tab instead of the active one:*
 
-,#+begin_src chrome-js :tab-id 1234567890
+#+begin_example
+# +begin_src chrome-js :tab-id 1234567890
 document.title
-,#+end_src
+# +end_src
+#+end_example
 
 *Return every frame's result (for pages with cross-origin iframes):*
 
-,#+begin_src chrome-js :frames all
+#+begin_example
+# +begin_src chrome-js :frames all
 location.origin
-,#+end_src
+# +end_src
+#+end_example
 
 * Querying and controlling the browser from Emacs
 
