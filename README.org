@@ -3,49 +3,54 @@
 
 =chrome-server= is a module that allows Emacs and Chrome to
 communicate with each other, in both directions.  Right-click on a
-page in Chrome and have it land in Emacs (org-capture, save-page,
-archive a ChatGPT conversation, catch a YouTube video for later).
+page in Chrome and have it sent to Emacs (org-capture, save-page,
+archive a ChatGPT conversation, save a YouTube video for later).
 Going the other way: from Emacs ask the browser things (what tabs
 are open?  what's the page title?  what's the video's current time?)
 and act on them.
 
 =chrome-server= is composed of two parts:
 
-1. *An Emacs side* (the elisp modules in this repository).  Emacs
-   runs a WebSocket server on =127.0.0.1:9130= that exposes named
-   handlers for browser-initiated actions and lets you call into the
-   browser from elisp.
-2. *A Chrome extension* (the =extension/= subdirectory).  An MV3
-   extension that dials the Emacs server, paints the right-click
-   menus, the toolbar icon, and the popup, and brokers requests in
-   both directions.
+1. *An Emacs side*.  A WebSocket server on =127.0.0.1:9130= that
+   registers handlers for actions initiated from Chrome, plus an
+   elisp API for actions Emacs initiates.
+2. *A Chrome extension*.  An MV3 extension that connects to the
+   Emacs server, registers the right-click menu items, owns the
+   toolbar icon and the popup, and routes requests in both
+   directions.
 
-Both must be running for anything to work.  The Chrome extension
-auto-reconnects, so starting / restarting Emacs is non-disruptive —
-the popup just blinks from Connected to Connecting and back.  Setup
-for each side is below.
+Both must be running.  The Chrome extension auto-reconnects, so
+restarting Emacs is non-disruptive — the popup transitions from
+Connected to Connecting and back.  Setup for each side is below.
 
-For everything beneath the surface — adding new actions, the wire
-protocol, the JSON schemas — see =CONTRIBUTING.org=.
+For implementation details — adding new actions, the wire protocol,
+the JSON schemas — see =CONTRIBUTING.org=.
 
 * Features
 
-- Right-click menu items in Chrome that fire Emacs actions:
-  org-capture, org-roam-capture, open-in-eww, save-page, save-chatgpt,
+** In Chrome
+
+- Right-click menu items that trigger Emacs actions: org-capture,
+  org-roam-capture, open-in-eww, save-page, save-chatgpt,
   add-youtube-video, save-youtube-transcript.
 - Configurable keyboard shortcuts for the same actions.
 - A toolbar popup with live connection status, per-tab permission
   controls, one-click buttons for every action, and a jump list of
   tabs that have granted JS-eval permission.
-- Per-tab consent gating arbitrary JavaScript evaluation in the
-  browser, surfaced by an in-page overlay and a red toolbar icon while
-  active.
+- Per-tab consent gating arbitrary JavaScript evaluation, indicated
+  by an in-page overlay and a red toolbar icon while active.
+
+** In Emacs
+
 - Org-Babel =chrome-js= source blocks that run JavaScript in the
-  active tab and return the value into your org buffer.
+  active tab and return the value into the org buffer.
 - An elisp API to query and steer the browser: list tabs, focus,
   open, close, evaluate JS with a return value.
-- Adding a new action is a single =config.json= edit + =make build=
-  — no Chrome extension code changes.
+
+** Extensibility
+
+- A new action is a single =config.json= edit plus =make build=; no
+  Chrome extension code change is required.
 
 * Right-click menu actions
 
@@ -56,7 +61,7 @@ protocol, the JSON schemas — see =CONTRIBUTING.org=.
 | Emacs: open in eww                     | any page or link             | opens the URL in =eww= inside Emacs                |
 | Emacs: save page                       | any page                     | archives the main content as an org file           |
 | Emacs: save ChatGPT conversation       | chatgpt.com pages            | saves the whole conversation as org                |
-| Emacs: add video for later             | YouTube pages / links        | drops a TODO with metadata into your videos file   |
+| Emacs: add video for later             | YouTube pages / links        | appends a TODO entry with metadata to the videos file |
 | Emacs: save transcript                 | YouTube pages / links        | runs =yt-dlp= and writes a clickable-timestamp org |
 
 * Keyboard shortcuts
@@ -79,10 +84,10 @@ The toolbar icon is purple by default.  It turns *red* on tabs that
 have granted Emacs permission to evaluate JavaScript on them.  Closing
 the tab revokes the grant.
 
-The first =EVAL_IN_ACTIVE_TAB= request on a tab paints a small overlay
-showing the code about to run, with four buttons: *Deny*, *Allow
-once*, *Allow 1 hour*, *Allow this tab*.  30 seconds of no answer
-counts as deny.
+The first =EVAL_IN_ACTIVE_TAB= request on a tab displays an in-page
+overlay showing the code about to run, with four buttons: *Deny*,
+*Allow once*, *Allow 1 hour*, *Allow this tab*.  30 seconds without
+a response counts as deny.
 
 * The popup
 
@@ -94,9 +99,9 @@ counts as deny.
 - Connection status to Emacs (●  Connected / Connecting… / Disconnected).
 - A one-line summary of this tab's eval permission, with buttons to
   grant for 1 hour, grant until tab closes, or revoke.
-- A button for each menu action so you can fire them without
-  right-clicking.  The right-aligned tag shows the assigned keyboard
-  shortcut, if any.
+- A button for each menu action that triggers it without using the
+  right-click menu.  The label on the right shows the assigned
+  keyboard shortcut, if any.
 - A "Tabs with permission" list — every tab where eval rights have
   been granted, with title, time remaining, and a *Revoke* button.
   Click a row to jump to that tab.
@@ -110,8 +115,8 @@ value back as the block result:
 document.querySelector('video').currentTime
 #+end_src
 
-The first time, the page paints a consent overlay — read the code,
-click Allow.  Same thing from elisp:
+The first time, the page displays a consent overlay — read the code,
+click Allow.  Same call from elisp:
 
 #+begin_src emacs-lisp
 (chrome-server-request "EVAL_IN_ACTIVE_TAB"
@@ -221,16 +226,16 @@ Most things are reachable from the popup → Options page (or
 - *Raise Emacs* — a checkbox per action.  When checked, Emacs comes to
   the foreground after that action completes.  Lives in browser
   storage, overrides the bundled defaults without rebuilding.
-- *Menus* / *Handlers* — raw JSON editors if you want to add or
-  customize beyond what the bundled config gives you.
+- *Menus* / *Handlers* — raw JSON editors for additions or changes
+  beyond the bundled defaults.
 
 Bigger changes (new menus, new content scripts, etc.) live in
 =extension/config.json=.  =CONTRIBUTING.org= covers the schema.
 
 * Security
 
-Three independent off-switches in =chrome://extensions=, biggest to
-smallest hammer:
+Three independent off-switches in =chrome://extensions=, from
+broadest scope to narrowest:
 
 1. *Developer mode* off → the entire Chrome extension stops.  Nothing
    works.
@@ -243,7 +248,8 @@ smallest hammer:
    revokes consent.
 
 The toolbar icon turns red on tabs you've granted eval permission, and
-the popup lists every consented tab so you can revoke without hunting.
+the popup lists every consented tab so revocation does not require
+searching for the tab.
 
 There is no authentication on the WebSocket — anything that can dial
 =127.0.0.1:9130= as your user can drive Emacs through =chrome-server=.
@@ -269,7 +275,7 @@ GPL-3.0-or-later.  The full license text is in =LICENSE=
 (the canonical FSF GPL v3 text).  Every source file carries an SPDX
 identifier; see =CONTRIBUTING.org= if you're adding new files.
 
-* Need to add a new action or hack the wire?
+* Adding a new action or modifying the protocol
 
 See =CONTRIBUTING.org=.  It covers the full configuration schema, the
 JSON shapes Emacs and the browser exchange, the build pipeline, and

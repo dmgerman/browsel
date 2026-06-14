@@ -288,7 +288,7 @@ Useful for page-side helpers.
 ** =consent.js= — eval gate
 
 The =user-script= shape adapter is gated by =ensureConsent(tabId,
-code)=.  The first eval on a tab paints the in-page overlay; the
+code)=.  The first eval on a tab displays the in-page overlay; the
 result is stored in =chrome.storage.session= keyed by tab id, with an
 expiry field (=null= = until tab close, ms epoch = expires at that
 time).
@@ -352,7 +352,7 @@ implementation notes belong here:
 =consentByTab[<tabId>] = { expiry: <ms> | null }=.  =null= = until
 tab close; ms = wall-clock expiry.  =ensureConsent= is the single
 gate, called from the =user-script= shape adapter.
-=chrome.tabs.onRemoved= drops entries (tab ids get reused).
+=chrome.tabs.onRemoved= removes entries (tab ids are reused over time).
 
 *Toolbar icon swap.*  =chrome.action.setIcon({path: ...})= silently
 fails inside MV3 service workers.  =background.js= and =handlers.js=
