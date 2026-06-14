@@ -23,6 +23,10 @@ Both must be running.  The Chrome extension auto-reconnects, so
 restarting Emacs is non-disruptive — the popup transitions from
 Connected to Connecting and back.  Setup for each side is below.
 
+Security has been a major concern in the design of this module. Please see [[*Security][Security]] below
+for more information.
+
+
 For implementation details — adding new actions, the wire protocol,
 the JSON schemas — see =CONTRIBUTING.org=.
 
@@ -223,7 +227,7 @@ The block accepts three optional header arguments:
 
 *Read the current video playback time:*
 
-(In the examples below, please remove the  space between # and +. I have included them so they
+(In the examples below, please remove the space between # and +. I have included them so they
 be properly rendered inside the browser)
 
 #+begin_example
@@ -235,52 +239,42 @@ document.querySelector('video').currentTime
 
 *Pause playback and report the new state:*
 
-#+begin_example
-# +begin_src chrome-js
+,#+begin_src chrome-js
 const v = document.querySelector('video');
 v.pause();
 ({ paused: v.paused, at: v.currentTime })
-# +end_src
-#+end_example
+,#+end_src
 
 *Collect several page properties into one object:*
 
-#+begin_example
-# +begin_src chrome-js
+,#+begin_src chrome-js
 ({ url: location.href,
    title: document.title,
    selection: getSelection().toString(),
    linkCount: document.links.length })
-# +end_src
-#+end_example
+,#+end_src
 
 *Run an =async= function and return its resolved value* (the babel
 backend awaits the returned promise):
 
-#+begin_example
-# +begin_src chrome-js
+,#+begin_src chrome-js
 (async () => {
   const r = await fetch(location.href);
   return { status: r.status, length: (await r.text()).length };
 })()
-# +end_src
-#+end_example
+,#+end_src
 
 *Run in a specific tab instead of the active one:*
 
-#+begin_example
-# +begin_src chrome-js :tab-id 1234567890
+,#+begin_src chrome-js :tab-id 1234567890
 document.title
-# +end_src
-#+end_example
+,#+end_src
 
 *Return every frame's result (for pages with cross-origin iframes):*
 
-#+begin_example
-# +begin_src chrome-js :frames all
+,#+begin_src chrome-js :frames all
 location.origin
-# +end_src
-#+end_example
+,#+end_src
 
 * Querying and controlling the browser from Emacs
 
@@ -406,29 +400,72 @@ Larger changes (new menus, new content scripts, etc.) are made in
 
 * Security
 
-Three independent off-switches in =chrome://extensions=, from
-broadest scope to narrowest:
+Running an unpacked Chrome extension requires *Developer mode* to be
+enabled in =chrome://extensions=.  This is a Chrome-level requirement,
+not a =chrome-server= feature.  With Developer mode off the extension
+does not run, no WebSocket is opened, and none of the features below
+are available.
 
-1. *Developer mode* off → the entire Chrome extension stops.  Nothing
-   works.
-2. *Allow User Scripts* off (per-extension Details toggle) → only JS
-   eval is blocked.  Right-click menus, save-page, tab listing all
-   keep working.
-3. *Per-tab consent prompt* (always on) → the first =chrome-js= eval on
-   any new tab shows you the code and asks for permission.  Three
-   options: Deny / Allow 1 hour / Allow this tab.  Closing the tab
-   revokes consent.
+The security posture of the running extension depends on which
+features you want to use:
 
-The toolbar icon turns red on tabs you've granted eval permission, and
-the popup lists every consented tab so revocation does not require
-searching for the tab.
+** Sending content from Chrome to Emacs
 
-There is no authentication on the WebSocket — any process that can
-connect to =127.0.0.1:9130= under your user account can invoke Emacs
-handlers through =chrome-server=.  The trust boundary is the same as
-for any other local-only daemon.
+The right-click menu actions, the popup buttons, and the keyboard
+shortcuts all transfer content from Chrome to Emacs at your explicit
+initiative: you click or invoke the shortcut, Chrome reads the URL,
+selection, or page HTML, and the data is sent over the WebSocket on
+=127.0.0.1:9130= to a registered handler in Emacs.  There is nothing
+to prompt for in this direction — the user is the one initiating each
+transfer.  No additional Chrome permissions need to be enabled beyond
+Developer mode.
 
-For the deeper threat model and what's /not/ protected, see
+** Querying and controlling tabs from Emacs
+
+The handlers =GET_ALL_TABS=, =GET_ACTIVE_TAB=, =OPEN_TAB=, =FOCUS_TAB=,
+and =CLOSE_TAB= let elisp running in Emacs read the tab list, switch
+between tabs, open new ones, and close existing ones.  These calls
+are not prompted: any elisp executing in your Emacs can invoke them.
+The capability is roughly equivalent to giving Emacs the ability to
+read its own buffer list — appropriate to the trust you already
+place in your editor.  No additional Chrome permissions are required.
+
+** Evaluating JavaScript in tabs
+
+=EVAL_IN_ACTIVE_TAB= and the =chrome-js= source blocks run arbitrary
+JavaScript inside a tab, which can read the DOM, cookies,
+=localStorage=, and any in-page state.  Two protections cover this
+capability:
+
+1. The Chrome-level toggle *Allow User Scripts* (=chrome://extensions=
+   → Chrome Server → Details).  When this is off, =EVAL_IN_ACTIVE_TAB=
+   fails with a clear error; every other feature continues to work.
+   Leave it off if JavaScript evaluation is not a capability you need.
+
+2. When *Allow User Scripts* is on, =chrome-server= still requires
+   per-tab consent before any script runs.  The first
+   =EVAL_IN_ACTIVE_TAB= request to a tab displays an in-page overlay
+   showing the code about to run, with four buttons: *Deny*, *Allow
+   once*, *Allow 1 hour*, or *Allow this tab*.  The toolbar icon
+   turns red on tabs with active consent, and the popup lists every
+   consented tab with per-row revocation.
+
+** Pausing the bridge without uninstalling
+
+Turn Developer mode off in =chrome://extensions=.  The extension
+stops, the WebSocket connection terminates, and Emacs reports "no
+client connected" if it is invoked.
+
+** The WebSocket itself
+
+The WebSocket on =127.0.0.1:9130= has no authentication.  Any process
+running under your user account can connect to it and invoke
+handlers in Emacs.  The trust boundary is the same as for any other
+local-only daemon you run; processes that can write to your home
+directory or send to your Emacs server can already affect your
+session in similar ways.
+
+For the deeper threat model and what is /not/ protected, see
 =CONTRIBUTING.org=.
 
 * Troubleshooting
@@ -444,9 +481,8 @@ For the deeper threat model and what's /not/ protected, see
 
 * License
 
-GPL-3.0-or-later.  The full license text is in =LICENSE=
-(the canonical FSF GPL v3 text).  Every source file carries an SPDX
-identifier; see =CONTRIBUTING.org= if you're adding new files.
+GPL-3.0-or-later.  The full license text is in =LICENSE=.
+
 
 * Adding a new action or modifying the protocol
 
