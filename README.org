@@ -33,6 +33,41 @@ two-way communication: Emacs can Chrome handlers, and Chrome can invoking Emacs 
 For implementation details — adding new actions, the wire protocol,
 the JSON schemas — see =CONTRIBUTING.org=.
 
+* Quick setup
+
+The full setup is documented in the *Setup* section below; this is
+the short form.
+
+1. *Configure and start the Emacs side.*  Add a =use-package= form to
+   your Emacs configuration that loads =chrome-server=, requires the
+   optional backends for the features you want, and starts the
+   WebSocket server:
+
+   #+begin_src emacs-lisp
+   (use-package chrome-server
+     :load-path "/path/to/chrome-server"
+     :config
+     (require 'chrome-server-www)      ; SAVE_PAGE
+     (require 'chrome-server-chatgpt)  ; CHATGPT
+     (require 'chrome-server-youtube)  ; YOUTUBE + YOUTUBE_TRANSCRIPT
+     (require 'chrome-server-babel)    ; org-babel chrome-js blocks
+     (chrome-server-start))
+   #+end_src
+
+   Comment out any =require= for a feature you do not want.
+
+2. *Load the Chrome extension.*  In Chrome:
+
+   1. Open =chrome://extensions= and turn on *Developer mode* (top right).
+   2. Click *Load unpacked* and select =extension/build/= from this
+      repository — the directory is committed already built, so no
+      build step is required.
+   3. (Only if you want JavaScript evaluation) open the extension's
+      *Details* page and toggle *Allow User Scripts* on.
+
+The popup should show ●  *Connected* within a few seconds.  If it
+does not, click *Reconnect*.
+
 * Features
 
 ** In Chrome
