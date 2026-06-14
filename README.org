@@ -458,12 +458,19 @@ client connected" if it is invoked.
 
 ** The WebSocket itself
 
-The WebSocket on =127.0.0.1:9130= has no authentication.  Any process
-running under your user account can connect to it and invoke
-handlers in Emacs.  The trust boundary is the same as for any other
-local-only daemon you run; processes that can write to your home
-directory or send to your Emacs server can already affect your
-session in similar ways.
+The Emacs side binds the WebSocket server to =127.0.0.1= explicitly,
+not to all interfaces.  The kernel rejects any connection that does
+not originate from the loopback interface, so a process on a different
+machine cannot connect even when reachable on the same LAN.  The
+Chrome extension is similarly unreachable: extensions do not accept
+network connections at all; they only initiate outbound ones.
+
+Local processes are a different matter.  The WebSocket has no
+authentication, so any process on the same machine that can connect
+to =127.0.0.1:9130= can invoke any handler that Emacs has registered.
+The trust boundary is the same as for any other local-only daemon
+you run; a process that already has access to your home directory or
+your Emacs server can affect your session in equivalent ways.
 
 For the deeper threat model and what is /not/ protected, see
 =CONTRIBUTING.org=.
