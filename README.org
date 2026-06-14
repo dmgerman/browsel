@@ -11,9 +11,26 @@ them.
 For everything beneath the surface — adding new actions, the wire
 protocol, the JSON schemas — see =CONTRIBUTING.org=.
 
-* What you get
+* Features
 
-** Right-click in Chrome
+- Right-click menu items in Chrome that fire Emacs actions:
+  org-capture, org-roam-capture, open-in-eww, save-page, save-chatgpt,
+  add-youtube-video, save-youtube-transcript.
+- Configurable keyboard shortcuts for the same actions.
+- A toolbar popup with live connection status, per-tab permission
+  controls, one-click buttons for every action, and a jump list of
+  tabs that have granted JS-eval permission.
+- Per-tab consent gating arbitrary JavaScript evaluation in the
+  browser, surfaced by an in-page overlay and a red toolbar icon while
+  active.
+- Org-Babel =chrome-js= source blocks that run JavaScript in the
+  active tab and return the value into your org buffer.
+- An elisp API to query and steer the browser: list tabs, focus,
+  open, close, evaluate JS with a return value.
+- Adding a new action is a single =config.json= edit + =make build=
+  — no Chrome extension code changes.
+
+* Right-click menu actions
 
 | Menu item                              | Where it shows               | What it does                                       |
 |----------------------------------------+------------------------------+----------------------------------------------------|
@@ -25,8 +42,10 @@ protocol, the JSON schemas — see =CONTRIBUTING.org=.
 | Emacs: add video for later             | YouTube pages / links        | drops a TODO with metadata into your videos file   |
 | Emacs: save transcript                 | YouTube pages / links        | runs =yt-dlp= and writes a clickable-timestamp org |
 
-You can also bind keyboard shortcuts to any of these at
-=chrome://extensions/shortcuts=.  A few are pre-suggested:
+* Keyboard shortcuts
+
+Bind any of the menu actions at =chrome://extensions/shortcuts=.  A
+few defaults are pre-suggested:
 
 - =Ctrl+Shift+C= → org-capture
 - =Ctrl+Shift+R= → org-roam-capture
@@ -34,17 +53,23 @@ You can also bind keyboard shortcuts to any of these at
 - =Ctrl+Shift+G= → save ChatGPT conversation
 
 The remaining commands are declared but unbound — Chrome only honors
-four default-bound shortcuts per extension, so you set the rest yourself.
+four default-bound shortcuts per Chrome extension, so the rest are
+yours to assign.
 
-** The toolbar icon
+* Per-tab eval consent
 
-Purple = neutral.  *Red* = this tab has granted Emacs permission to
-evaluate JavaScript on it.  When you close the tab the permission dies
-with it.
+The toolbar icon is purple by default.  It turns *red* on tabs that
+have granted Emacs permission to evaluate JavaScript on them.  Closing
+the tab revokes the grant.
 
-** The popup (click the toolbar icon)
+The first =EVAL_IN_ACTIVE_TAB= request on a tab paints a small overlay
+showing the code about to run, with four buttons: *Deny*, *Allow
+once*, *Allow 1 hour*, *Allow this tab*.  30 seconds of no answer
+counts as deny.
 
-#+caption: The extension popup
+* The popup
+
+#+caption: The Chrome extension popup
 #+attr_org: :width 280
 #+attr_html: :width 280
 [[file:doc/popup.png]]
@@ -55,31 +80,28 @@ with it.
 - A button for each menu action so you can fire them without
   right-clicking.  The right-aligned tag shows the assigned keyboard
   shortcut, if any.
-- A "Tabs with permission" list — every tab where you've granted eval
-  rights, with title, time remaining, and a *Revoke* button.  Click a
-  row to jump to that tab.
+- A "Tabs with permission" list — every tab where eval rights have
+  been granted, with title, time remaining, and a *Revoke* button.
+  Click a row to jump to that tab.
 
-** From inside Emacs
+* Run JavaScript in any tab from Emacs
 
-Send the browser a small JavaScript snippet, get the value back, all
-inside an org buffer:
+Send the browser a JavaScript snippet from an org buffer; get the
+value back as the block result:
 
 #+begin_src chrome-js
 document.querySelector('video').currentTime
 #+end_src
 
-This runs against your active Chrome tab.  The first time it does, the
-page paints a small overlay asking you to grant permission — read the
-code, click Allow.
-
-Same thing from elisp:
+The first time, the page paints a consent overlay — read the code,
+click Allow.  Same thing from elisp:
 
 #+begin_src emacs-lisp
 (chrome-server-request "EVAL_IN_ACTIVE_TAB"
                        '(:code "document.querySelector('video').currentTime"))
 #+end_src
 
-Useful patterns:
+* Querying and steering the browser from Emacs
 
 #+begin_src emacs-lisp
 ;; List every open tab as title/url pairs
@@ -156,7 +178,7 @@ A few variables you'll likely want to set:
 
 The full list is in =CONTRIBUTING.org=.
 
-** Extension
+** Chrome extension
 
 #+begin_src bash
 cd extension
@@ -188,12 +210,13 @@ Most things are reachable from the popup → Options page (or
 Bigger changes (new menus, new content scripts, etc.) live in
 =extension/config.json=.  =CONTRIBUTING.org= covers the schema.
 
-* Security in plain terms
+* Security
 
 Three independent off-switches in =chrome://extensions=, biggest to
 smallest hammer:
 
-1. *Developer mode* off → the entire extension stops.  Nothing works.
+1. *Developer mode* off → the entire Chrome extension stops.  Nothing
+   works.
 2. *Allow User Scripts* off (per-extension Details toggle) → only JS
    eval is blocked.  Right-click menus, save-page, tab listing all
    keep working.
@@ -216,10 +239,10 @@ For the deeper threat model and what's /not/ protected, see
 
 | Symptom                                   | First thing to try                                                            |
 |-------------------------------------------+-------------------------------------------------------------------------------|
-| Popup shows Disconnected                  | Click Reconnect.  If still red: reload the extension card in =chrome://extensions=.  If still red: =M-x chrome-server-start=. |
-| =EVAL_IN_ACTIVE_TAB= errors                | Toggle *Allow User Scripts* on in extension Details.                          |
+| Popup shows Disconnected                  | Click Reconnect.  If still red: reload the Chrome extension card in =chrome://extensions=.  If still red: =M-x chrome-server-start=. |
+| =EVAL_IN_ACTIVE_TAB= errors                | Toggle *Allow User Scripts* on in the Chrome extension's Details.             |
 | Consent overlay never appears             | =chrome://=, =chrome-extension://=, and the Web Store refuse eval — Chrome policy. |
-| "no client connected" from elisp          | Extension isn't connected.  Check the popup; reload if needed.                |
+| "no client connected" from elisp          | Chrome extension isn't connected.  Check the popup; reload if needed.         |
 | =chrome-server-start= says "address in use" | Another process is already on 9130.  =lsof -nP -iTCP:9130 -sTCP:LISTEN= to see which. |
 | Save-page produces no notification        | Check =*Messages*=; the handler logs success/failure there.                    |
 

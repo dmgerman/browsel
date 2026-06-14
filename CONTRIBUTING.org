@@ -15,9 +15,9 @@ bridge does and how it's set up.
 | =chrome-server-chatgpt.el=        | =CHATGPT=                                                                                  |
 | =chrome-server-youtube.el=        | =YOUTUBE=, =YOUTUBE_TRANSCRIPT=                                                             |
 | =chrome-server-babel.el=          | =org-babel-execute:chrome-js=                                                              |
-| =extension/config.json=           | Single source of truth for the extension                                                   |
-| =extension/src/=                  | Extension JS (service worker, offscreen, popup, options, content scripts, consent)         |
-| =extension/html/=, =icons/=       | Extension HTML + icons                                                                     |
+| =extension/config.json=           | Single source of truth for the Chrome extension                                            |
+| =extension/src/=                  | Chrome extension JS (service worker, offscreen, popup, options, content scripts, consent)  |
+| =extension/html/=, =icons/=       | Chrome extension HTML + icons                                                              |
 | =extension/scripts/=              | =build-manifest.py=, =make-red-icons.py=                                                   |
 | =extension/Makefile=              | =make build= / =make load= / =make package= / =make lint=                                   |
 | =extension/build/=                | Generated; what Chrome's "Load unpacked" reads.  Gitignored.                                |
@@ -257,7 +257,7 @@ in =extension/src/handlers.js= and reference it via =args-shape=.
 | =(chrome-server-register-handler NAME FN)=            | Register a browser → Emacs handler.  Overwrites on duplicate.                          |
 | =(chrome-server-defer FN &rest ARGS)=                 | Schedule FN to run on the next idle tick — for respond-fast-then-defer.                |
 
-* Extending the extension side
+* Extending the Chrome extension side
 
 ** =payload.js= — built-in payload kinds
 
@@ -309,7 +309,7 @@ manifests as "Service worker registration failed.  Status code: 3".
 * Build / verify cycle
 
 #+begin_src bash
-# Extension
+# Chrome extension
 cd extension && make build
 
 # Elisp — byte-compile to catch warnings:
@@ -324,19 +324,19 @@ emacs --batch -Q --eval '(require (quote package))' \
 # Reload in a running Emacs:
 emacsclient -e '(progn (chrome-server-stop) (chrome-server-start))'
 
-# Confirm WS bound and extension connected:
+# Confirm WS bound and the Chrome extension connected:
 lsof -nP -iTCP:9130 -sTCP:LISTEN
 emacsclient -e '(format "clients=%d" (length chrome-server--clients))'
 #+end_src
 
 * Debugging surfaces
 
-| Side      | Where                                                                  |
-|-----------+------------------------------------------------------------------------|
-| Emacs     | =(setq chrome-server-debug t)= → =*chrome-server*= buffer per frame    |
-| Emacs     | =*Messages*= for handler success/error                                  |
-| Extension | =chrome://extensions= → Details → Inspect views: service worker        |
-| Extension | =chrome://extensions= → Details → Inspect views: offscreen.html        |
+| Side             | Where                                                                  |
+|------------------+------------------------------------------------------------------------|
+| Emacs            | =(setq chrome-server-debug t)= → =*chrome-server*= buffer per frame    |
+| Emacs            | =*Messages*= for handler success/error                                  |
+| Chrome extension | =chrome://extensions= → Details → Inspect views: service worker        |
+| Chrome extension | =chrome://extensions= → Details → Inspect views: offscreen.html        |
 
 For non-obvious failure modes (MV3 setIcon paths failing, IPv6
 localhost, =defvar= not overwriting, =lexical-binding= breaking
