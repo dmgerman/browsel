@@ -147,7 +147,20 @@ keys:
 |----------+------------------------------------------------------------------------|
 | =:code=  | string — the JavaScript to evaluate                                    |
 | =:tabId= | optional integer — target tab (default: the active tab in the current window) |
-| =:world= | optional string — ="MAIN"= (the page's window context, default) or ="USER_SCRIPT"= (an isolated world) |
+| =:world= | optional string — ="MAIN"= (default) or ="USER_SCRIPT"=                |
+
+The =:world= key chooses which JavaScript execution context the
+snippet runs in.  In ="MAIN"= the snippet shares =window= with the
+page's own code: it can read variables declared by the page (for
+example =window.ytInitialPlayerResponse= on a YouTube watch page),
+call functions defined by the page's framework, and inspect any
+state the application keeps in globals.  This is what is needed when
+the goal is to extract or operate on values the page itself
+constructed.  In ="USER_SCRIPT"= the snippet runs in an isolated
+context: it can still read and modify the DOM, but its JavaScript
+variables and functions are not visible to (or visible from) the
+page's own code.  Use it when DOM access is enough and isolation
+from the page is preferable.
 
 The response =:result= is an array of =InjectionResult= plists, one
 per frame the script ran in.  Each entry carries =:documentId=,
