@@ -110,19 +110,124 @@ a response counts as deny.
 
 * Run JavaScript in any tab from Emacs
 
-Run a JavaScript snippet from an org buffer; the value of the last
-expression becomes the block result:
+** =chrome-server-request=
+
+The central elisp entry point for invoking a Chrome handler.
+Synchronous; blocks until the Chrome extension responds or the
+=chrome-server-request-timeout= deadline (default 10 seconds) expires.
+
+#+begin_src emacs-lisp
+(chrome-server-request NAME &optional PAYLOAD)
+#+end_src
+
+| Argument  | Type                                                              |
+|-----------+-------------------------------------------------------------------|
+| =NAME=    | string — the WebSocket request name (e.g. ="EVAL_IN_ACTIVE_TAB"=) |
+| =PAYLOAD= | optional plist — keys depend on the request                       |
+
+Returns a response plist with =:status= (either ="ok"= or ="error"=)
+and a request-specific body.  On error, =:message= contains a
+human-readable reason.
+
+For =EVAL_IN_ACTIVE_TAB= the payload keys are:
+
+| Key       | Meaning                                                              |
+|-----------+----------------------------------------------------------------------|
+| =:code=   | string — the JavaScript to evaluate                                  |
+| =:tabId=  | optional integer — target tab (default: the active tab in the current window) |
+| =:world=  | optional string — ="MAIN"= (page context, default) or ="USER_SCRIPT"= (isolated) |
+
+The response =:result= is an array of =InjectionResult= plists, one
+per frame the script ran in.  Each has =:documentId=, =:frameId=, and
+=:result= (the value of the last JavaScript expression).
+
+Asynchronous variant:
+
+#+begin_src emacs-lisp
+(chrome-server-request-async NAME PAYLOAD CALLBACK)
+#+end_src
+
+Returns the request id immediately; invokes =CALLBACK= with the
+response plist when it arrives.  Safe to invoke from any context,
+including inside a WebSocket callback.
+
+** Minimal example
+
+#+begin_src emacs-lisp
+(chrome-server-request "EVAL_IN_ACTIVE_TAB"
+                       '(:code "document.querySelector('video').currentTime"))
+;; => (:status "ok"
+;;     :result ((:documentId "..." :frameId 0 :result 60.34)))
+#+end_src
+
+The first request to a tab displays the consent overlay.  Extracting
+the value from a one-frame result:
+
+#+begin_src emacs-lisp
+(let ((r (chrome-server-request "EVAL_IN_ACTIVE_TAB"
+                                '(:code "document.title"))))
+  (plist-get (car (plist-get r :result)) :result))
+;; => "Subscriptions - YouTube"
+#+end_src
+
+** =chrome-js= source blocks
+
+The =chrome-server-babel= module defines =org-babel-execute:chrome-js=
+as a convenience layer over =chrome-server-request=.  The block body
+is the =:code= payload; the value of the last expression becomes the
+block result.
+
+Header arguments:
+
+| Argument    | Values                          | Default      |
+|-------------+---------------------------------+--------------|
+| =:world=    | ="MAIN"= or ="USER_SCRIPT"=     | ="MAIN"=     |
+| =:tab-id=   | integer tab id                  | active tab   |
+| =:frames=   | ="all"= for per-frame results   | first frame  |
+
+*Read the current video playback time:*
 
 #+begin_src chrome-js
 document.querySelector('video').currentTime
 #+end_src
 
-The first time, the page displays a consent overlay — read the code,
-click Allow.  Same call from elisp:
+*Pause playback and report the new state:*
 
-#+begin_src emacs-lisp
-(chrome-server-request "EVAL_IN_ACTIVE_TAB"
-                       '(:code "document.querySelector('video').currentTime"))
+#+begin_src chrome-js
+const v = document.querySelector('video');
+v.pause();
+({ paused: v.paused, at: v.currentTime })
+#+end_src
+
+*Collect several page properties into one object:*
+
+#+begin_src chrome-js
+({ url: location.href,
+   title: document.title,
+   selection: getSelection().toString(),
+   linkCount: document.links.length })
+#+end_src
+
+*Run an =async= function and return its resolved value* (the babel
+backend awaits the returned promise):
+
+#+begin_src chrome-js
+(async () => {
+  const r = await fetch(location.href);
+  return { status: r.status, length: (await r.text()).length };
+})()
+#+end_src
+
+*Run in a specific tab instead of the active one:*
+
+#+begin_src chrome-js :tab-id 1234567890
+document.title
+#+end_src
+
+*Return every frame's result (for pages with cross-origin iframes):*
+
+#+begin_src chrome-js :frames all
+location.origin
 #+end_src
 
 * Querying and controlling the browser from Emacs
