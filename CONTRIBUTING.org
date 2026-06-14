@@ -1,0 +1,434 @@
+#+title: chrome-server — contributing
+#+author: Daniel M. German
+
+Reference for extending the bridge: adding new menu items, adding new
+browser → Emacs handlers, adding new Emacs → browser handlers, or
+modifying the build pipeline.  Read =README.org= first for what the
+bridge does and how it's set up.
+
+* Repository layout
+
+| Path                              | Owns                                                                                       |
+|-----------------------------------+--------------------------------------------------------------------------------------------|
+| =chrome-server.el=                | Server lifecycle, JSON frame dispatch, async/sync request primitives, shared helpers, =ORG_CAPTURE= / =ORG_ROAM_CAPTURE= / =EWW= handlers |
+| =chrome-server-www.el=            | =SAVE_PAGE=                                                                                |
+| =chrome-server-chatgpt.el=        | =CHATGPT=                                                                                  |
+| =chrome-server-youtube.el=        | =YOUTUBE=, =YOUTUBE_TRANSCRIPT=                                                             |
+| =chrome-server-babel.el=          | =org-babel-execute:chrome-js=                                                              |
+| =extension/config.json=           | Single source of truth for the extension                                                   |
+| =extension/src/=                  | Extension JS (service worker, offscreen, popup, options, content scripts, consent)         |
+| =extension/html/=, =icons/=       | Extension HTML + icons                                                                     |
+| =extension/scripts/=              | =build-manifest.py=, =make-red-icons.py=                                                   |
+| =extension/Makefile=              | =make build= / =make load= / =make package= / =make lint=                                   |
+| =extension/build/=                | Generated; what Chrome's "Load unpacked" reads.  Gitignored.                                |
+| =spookfox/=, =emacsProtocol/=     | Frozen reference material from earlier designs.  Do not modify.                            |
+| =ai/=                             | Design rationale and debugging notes.                                                       |
+
+* The wire protocol
+
+JSON text frames over a single WebSocket on =127.0.0.1:9130=.  Two shapes:
+
+#+begin_src js
+// Request
+{ "id": "<uuid>", "name": "ORG_CAPTURE", "payload": { ... } }
+
+// Response
+{ "requestId": "<uuid>", "payload": { ... } }
+#+end_src
+
+Distinguished by which key is present.  Request names are
+=SCREAMING_SNAKE_CASE=.  Error envelope inside a response payload:
+
+#+begin_src js
+{ "status": "error", "message": "..." }
+#+end_src
+
+Successful responses set =status: "ok"= and may include =message= (a
+human-readable line that bubbles up to =*Messages*= and the popup).
+Timeouts: =chrome-server-request-timeout= (default 10s) on the Emacs
+side, 5s on the offscreen-doc side.
+
+** Request flow
+
+Browser → Emacs (right-click, popup, hotkey, content-script relay):
+
+1. Service worker gathers the payload (=payload.js= =gatherPayload=
+   dispatches on the menu's =payload= field).
+2. Service worker hands to the offscreen doc, which sends the WS frame.
+3. Emacs's =:on-message= handler accumulates frames until complete,
+   parses JSON, looks up the handler in =chrome-server--handlers=,
+   invokes it.
+4. Handler's return value becomes the response payload.
+
+Emacs → browser:
+
+1. =chrome-server-request= / =-async= generates a UUID, registers a
+   callback, sends the frame.
+2. Offscreen doc receives, asks the service worker to dispatch
+   (=handlers.js= =dispatchEmacsRequest=).
+3. Service worker resolves the =chrome.*= API via the handler entry's
+   =api= path or =args-shape= adapter, returns the value.
+4. Offscreen sends response; Emacs fires the callback.
+
+** Frame fragmentation
+
+WebSocket libraries call message callbacks /per-frame/, not per
+message.  Big payloads (a page's HTML often runs >128 KB) come as one
+initial frame plus several continuation frames.  =chrome-server.el=
+buffers per-client via =chrome-server--rx-buffers= and only parses on
+=websocket-frame-completep=.  Do not remove that — see
+=ai/gotchas.md=.
+
+* Configuration schema: =extension/config.json=
+
+Top-level:
+
+| Key              | Purpose                                                          |
+|------------------+------------------------------------------------------------------|
+| =extension=      | MV3 manifest infrastructure (name, version, permissions, …)     |
+| =menus=          | Right-click menu entries (each may carry a =command= hotkey)    |
+| =handlers=       | =chrome.*= calls Emacs is allowed to invoke (Emacs → browser)   |
+| =contentScripts= | Declarative content scripts (matches/js/run_at)                  |
+
+** Menu entry
+
+#+begin_src js
+{
+  "id":       "save-page",                  // stable identifier
+  "title":    "Emacs: save page",
+  "trigger":  "page",                       // page | selection | link | image
+                                            // (or an array for multiple)
+  "request":  "SAVE_PAGE",                  // WS request name
+  "payload":  "page-html",                  // how to build the payload
+  "raise":    false,                        // ask Emacs to focus?
+  "documentUrlPatterns": ["https://..."],   // filter by page URL
+  "targetUrlPatterns":   ["https://..."],   // filter by link/image URL
+  "command":  {                             // optional Chrome command
+    "name":          "save-page",
+    "description":   "Save current page",
+    "suggested_key": { "default": "Ctrl+Shift+S", "mac": "MacCtrl+Shift+S" }
+  }
+}
+#+end_src
+
+** =payload= kinds
+
+A string (built-in) or an object (parameterised).
+
+| String form               | Builds payload from                                       |
+|---------------------------+-----------------------------------------------------------|
+| =page-url=                | tab url + title                                           |
+| =page-url-with-selection= | tab url + title + current selection                       |
+| =selection-text=          | url + title + selection                                   |
+| =page-html=               | url + title + main/article/body =innerHTML=               |
+| =link-url=                | =info.linkUrl= + link text                                |
+| =image-url=               | =info.srcUrl= + tab title                                 |
+| =url=                     | context-aware: link / image / page URL, whichever applies |
+
+Object kinds:
+
+#+begin_src js
+{ "kind": "tab-message", "method": "extract-conversation" }
+#+end_src
+
+The service worker calls =chrome.tabs.sendMessage(tabId, {method,
+...})= and the matching content script replies with
+=sendResponse({payload: ...})=.  Adding a new scraper is a content
+script + this menu entry — no =payload.js= edit.
+
+** Handler entry (Emacs → browser)
+
+#+begin_src js
+{ "name": "GET_ALL_TABS",  "api": "chrome.tabs.query",  "args": {} }
+{ "name": "OPEN_TAB",      "api": "chrome.tabs.create", "args-from": "payload" }
+{ "name": "FOCUS_TAB",     "api": "chrome.tabs.update", "args-shape": "focus-tab" }
+{ "name": "EVAL_IN_ACTIVE_TAB",
+  "api":  "chrome.userScripts.execute", "args-shape": "user-script" }
+#+end_src
+
+| Field         | Meaning                                                             |
+|---------------+---------------------------------------------------------------------|
+| =args=        | Static literal passed to the =chrome.*= API                         |
+| =args-from=   | ="payload"= → request payload is passed as the API arg              |
+| =args-shape=  | Named adapter in =extension/src/handlers.js=                        |
+
+Built-in shape adapters: =focus-tab=, =tab-id=, =user-script= (the
+last one is gated by =consent.js=).
+
+** Content scripts
+
+#+begin_src js
+"contentScripts": [
+  { "matches": ["<all_urls>"],            "js": ["src/content.js"],
+    "run_at": "document_idle", "all_frames": false },
+  { "matches": ["https://chatgpt.com/*"], "js": ["src/content-chatgpt.js"],
+    "run_at": "document_idle" }
+]
+#+end_src
+
+Adding a new scraper site: drop the JS in =extension/src/=, add a
+=contentScripts= entry pointing at it, add a menu entry whose
+=payload= is =tab-message= naming a method the script answers to.
+Then add the file to =SRC_FILES= in the Makefile (=make lint= catches
+imports of un-listed files but not contentScripts entries themselves).
+
+* Built-in request catalogs
+
+** Browser → Emacs
+
+| Name                  | Payload keys                          | Effect                                            |
+|-----------------------+---------------------------------------+---------------------------------------------------|
+| =ORG_CAPTURE=         | url, title, text, raise               | Open org-capture                                   |
+| =ORG_ROAM_CAPTURE=    | url, title, text, raise               | Open org-roam capture                              |
+| =EWW=                 | url, raise                            | Open URL in eww                                    |
+| =SAVE_PAGE=           | url, title, html                      | Save main content to =chrome-server-www-archive-dir= |
+| =CHATGPT=             | url, title, turns                     | Save conversation to =chrome-server-chatgpt-dir=    |
+| =YOUTUBE=             | url, title, text, raise               | Capture into =chrome-server-youtube-videos-file=    |
+| =YOUTUBE_TRANSCRIPT=  | url, title, raise                     | Save transcript to =chrome-server-youtube-transcript-dir= |
+
+Capture handlers also prime three dynamic vars consumable from
+org-capture templates: =(chrome-server-get-url)=,
+=(chrome-server-get-title)=, =(chrome-server-get-selection)=.
+
+** Emacs → browser
+
+| Name                 | Args                                       | Returns                                |
+|----------------------+--------------------------------------------+----------------------------------------|
+| =GET_ALL_TABS=       | (none)                                     | array of Chrome Tab plists             |
+| =GET_ACTIVE_TAB=     | (none)                                     | array (active tabs of current window)  |
+| =OPEN_TAB=           | =:url=                                     | the created Tab                        |
+| =FOCUS_TAB=          | =:id=, optional =:focusWindow=             | ={:status "ok"}=                       |
+| =CLOSE_TAB=          | =:id=                                      | =null=                                 |
+| =EVAL_IN_ACTIVE_TAB= | =:code=, optional =:world=, =:tabId=        | =:result= = array of =InjectionResult= |
+
+=InjectionResult= is =(:documentId "..." :frameId 0 :result <value>)=.
+
+* All Emacs-side configuration variables
+
+| Variable                                             | Purpose                                                                                                  |
+|------------------------------------------------------+----------------------------------------------------------------------------------------------------------|
+| =chrome-server-port=                                 | WS server port (default 9130)                                                                            |
+| =chrome-server-host=                                 | bind address.  =local= = 127.0.0.1; =nil= = all interfaces                                                |
+| =chrome-server-request-timeout=                      | seconds before async req aborts (default 10)                                                              |
+| =chrome-server-debug=                                | when non-nil, log every WS frame to *chrome-server*                                                       |
+| =chrome-server-org-capture-key=                      | template key passed to =org-capture= for =ORG_CAPTURE=; =nil= = interactive picker                        |
+| =chrome-server-pandoc-executable=                    | =pandoc= binary used by save-page and chatgpt                                                            |
+| =chrome-server-www-archive-dir=                      | directory where save-page writes archives (set this)                                                      |
+| =chrome-server-chatgpt-dir=                          | directory where save-chatgpt writes conversations (set this)                                              |
+| =chrome-server-youtube-api-key=                      | YouTube Data API v3 key, for video metadata                                                              |
+| =chrome-server-youtube-videos-file=                  | org file the YouTube capture appends to (set this)                                                       |
+| =chrome-server-youtube-transcript-dir=               | directory where YouTube transcripts are written (set this)                                                |
+| =chrome-server-youtube-transcript-yt-dlp-executable= | =yt-dlp= binary used to fetch subtitles                                                                  |
+
+The bundled =defvar= defaults work but assume a particular directory
+layout; downstream users will usually want to set the path-shaped
+ones explicitly.
+
+* Extending the Emacs side
+
+** Add a new browser → Emacs handler
+
+#+begin_src emacs-lisp
+(chrome-server-register-handler
+ "OPEN_IN_FIREFOX"
+ (lambda (payload)
+   (start-process "ff" nil "open" "-a" "Firefox" (plist-get payload :url))
+   '((status . "ok") (message . "opened in Firefox"))))
+#+end_src
+
+Pair it with a config menu entry whose =request= matches the name.
+For long-running actions, use the respond-fast-then-defer pattern:
+return =((status . "ok"))= immediately, schedule the real work with
+=(chrome-server-defer #'do-it payload)=.
+
+** Add a new Emacs → browser handler
+
+If the =chrome.*= API you want is a regular function, add a config
+=handlers= entry — no JS needed.  If it needs an adapter (multiple
+args, transforming the payload), add a new entry to =SHAPE_ADAPTERS=
+in =extension/src/handlers.js= and reference it via =args-shape=.
+
+** Emacs-side primitives
+
+| Call                                                  | Notes                                                                                  |
+|-------------------------------------------------------+----------------------------------------------------------------------------------------|
+| =(chrome-server-request NAME PAYLOAD)=                | Sync.  Blocks with =accept-process-output=.  Do not call from inside a WS callback.    |
+| =(chrome-server-request-async NAME PAYLOAD CALLBACK)= | Async.  Returns request id.  Always safe.                                              |
+| =(chrome-server-register-handler NAME FN)=            | Register a browser → Emacs handler.  Overwrites on duplicate.                          |
+| =(chrome-server-defer FN &rest ARGS)=                 | Schedule FN to run on the next idle tick — for respond-fast-then-defer.                |
+
+* Extending the extension side
+
+** =payload.js= — built-in payload kinds
+
+Each kind is a =case= in =gatherPayload=.  For irregular shapes prefer
+the object form (=tab-message=) which is config-only and doesn't
+require an edit here.
+
+** =handlers.js= — shape adapters
+
+Functions in =SHAPE_ADAPTERS=.  Each takes the request payload and
+calls a =chrome.*= API.  Document the expected payload at the top of
+the adapter.
+
+** =content.js= — generic page-side relay
+
+Web pages can post a message to fire any Emacs handler:
+
+#+begin_src js
+window.postMessage(
+  { source: "chrome-server", name: "EWW", payload: { url: "..." } },
+  "*"
+);
+#+end_src
+
+The content script forwards to the service worker, which dispatches.
+Useful for page-side helpers.
+
+** =consent.js= — eval gate
+
+The =user-script= shape adapter is gated by =ensureConsent(tabId,
+code)=.  The first eval on a tab paints the in-page overlay; the
+result is stored in =chrome.storage.session= keyed by tab id, with an
+expiry field (=null= = until tab close, ms epoch = expires at that
+time).
+
+** Build pipeline
+
+#+begin_src
+config.json + Makefile + build-manifest.py
+                          │
+                          ▼
+                  manifest.json
+                          │
+                          ▼
+         build/  (config.json copy
+                  + manifest.json
+                  + src/ html/ icons/)
+                          │
+                          ▼
+         Chrome "Load unpacked"
+#+end_src
+
+=make build= runs lint, copies =SRC_FILES= into =build/=, and
+generates =build/manifest.json= via =scripts/build-manifest.py=.  The
+manifest builder pulls everything from =config.json= — the static
+infrastructure under =config.extension=, =content_scripts= from
+=config.contentScripts=, =commands= collected from
+=menus[].command=.
+
+=make lint= validates JSON and verifies every JS file's =import=
+statements reference files in =SRC_FILES=.  This catches the most
+common failure (forgetting to add a new file to the list — symptom is
+"Service worker registration failed.  Status code: 3").
+
+=make package= builds and zips =build/= into =../dist/=.
+
+=make load= builds, copies the build path to the clipboard (macOS),
+and opens =chrome://extensions=.
+
+* Build / verify cycle
+
+#+begin_src bash
+# Extension
+cd extension && make build
+
+# Elisp — byte-compile to catch warnings:
+emacs --batch -Q --eval '(require (quote package))' \
+  --eval '(package-initialize)' \
+  -L . \
+  --eval '(dolist (f (list "chrome-server.el" "chrome-server-www.el"
+                           "chrome-server-chatgpt.el" "chrome-server-youtube.el"
+                           "chrome-server-babel.el"))
+           (or (byte-compile-file f) (kill-emacs 1)))'
+
+# Reload in a running Emacs:
+emacsclient -e '(progn (chrome-server-stop) (chrome-server-start))'
+
+# Confirm WS bound and extension connected:
+lsof -nP -iTCP:9130 -sTCP:LISTEN
+emacsclient -e '(format "clients=%d" (length chrome-server--clients))'
+#+end_src
+
+After a manifest-affecting change, the extension card in
+=chrome://extensions= must be reloaded — =make build= alone doesn't
+restart Chrome.
+
+* Debugging surfaces
+
+| Side      | Where                                                                  |
+|-----------+------------------------------------------------------------------------|
+| Emacs     | =(setq chrome-server-debug t)= → =*chrome-server*= buffer per frame    |
+| Emacs     | =*Messages*= for handler success/error                                  |
+| Extension | =chrome://extensions= → Details → Inspect views: service worker        |
+| Extension | =chrome://extensions= → Details → Inspect views: offscreen.html        |
+
+For non-obvious failure modes (MV3 setIcon paths failing, IPv6
+localhost, =defvar= not overwriting, =lexical-binding= breaking
+=org-capture-initial=, YouTube PoToken gating, …) see =ai/gotchas.md=.
+
+* Threat model & security implementation
+
+** Where the threats live
+
+- *Local processes* — any process on the same machine can dial
+  =127.0.0.1:9130= and speak the WS protocol.  No authentication.
+- *Inside the browser* — =EVAL_IN_ACTIVE_TAB= runs JS with full
+  access to the page's DOM, cookies, =localStorage=, session state.
+
+** Per-tab consent (implementation)
+
+Lives in =extension/src/consent.js=.  Storage shape in
+=chrome.storage.session=:
+
+#+begin_src js
+{ "consentByTab": { "<tabId>": { "expiry": <ms> | null } } }
+#+end_src
+
+=expiry: null= means "no time limit, dies when the tab closes".
+Numeric expiry means "expires at that wall-clock time."  The
+=ensureConsent= entry point is the single gate; the =user-script=
+shape adapter in =handlers.js= calls it before any
+=chrome.userScripts.execute=.
+
+Cleanup hooks:
+
+- =chrome.tabs.onRemoved= → =forgetTabConsent= drops the entry.
+- Tab ids are reused; do not assume an old id is still valid.
+
+The popup queries via =CONSENT_GET=, grants via =CONSENT_GRANT=,
+revokes via =CONSENT_REVOKE=, and lists all granted tabs via
+=CONSENTED_TABS=.
+
+** Toolbar icon swap
+
+=chrome.action.setIcon({path: ...})= is broken inside MV3 service
+workers (silently fails with "Failed to fetch").  =background.js= and
+=handlers.js= build =ImageData= from the PNGs via =OffscreenCanvas=
+and pass that instead.  See =ai/gotchas.md=.
+
+** What is /not/ protected
+
+- =GET_ALL_TABS=, =FOCUS_TAB=, =OPEN_TAB=, =CLOSE_TAB= don't prompt —
+  they expose URLs and steer the browser but can't read page contents.
+- The Chrome → Emacs direction is gated only by the user initiating
+  the action.
+- Host permissions include =https://*/*= and =http://*/*= so eval
+  works on arbitrary sites.  Narrow them at the cost of breaking
+  save-page on excluded hosts.
+
+** Hardening ideas not yet implemented
+
+- Pause toggle in the popup (refuse to dial the WS).
+- Origin allowlist for eval.
+- Per-session token auth on the WS.
+- Narrower =host_permissions=.
+
+* Further reading
+
+- =ai/spookfox-like.md= — the original plan that drove the WS rewrite.
+  Useful when a design decision looks weird and you want to know why.
+- =ai/gotchas.md= — non-obvious failure modes collected during the
+  build.  Read before debugging anything in the categories listed there.
+- =CLAUDE.md= — per-module rules for Claude Code (or for the next
+  human picking this up after a long absence).

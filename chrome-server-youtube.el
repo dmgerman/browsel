@@ -1,36 +1,42 @@
-;;; chrome-server-youtube.el --- YouTube backend for chrome-server
+;;; chrome-server-youtube.el --- YouTube backend for chrome-server  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Daniel M. German <dmg@turingmachine.org>
 
 ;; Author: Daniel M. German <dmg@turingmachine.org>
 ;; Maintainer: Daniel M. German <dmg@turingmachine.org>
-;; Keywords: browser, http, org, youtube, transcript
+;; Keywords: browser, websocket, org, youtube, transcript
 ;; Homepage: https://github.com/dmgerman
 
 ;;; Commentary:
 
-;; YouTube backend for chrome-server.  Provides two endpoints:
+;; YouTube backend for chrome-server.  Registers two request handlers:
 ;;
-;;   POST /youtube          — capture a video into a configurable org file
-;;   POST /youtube-transcript — download subtitles and save as an org file
-;;                             with clickable timestamp links
+;;   YOUTUBE             — capture a video into a configurable org file
+;;   YOUTUBE_TRANSCRIPT  — download subtitles and save as an org file
+;;                         with clickable timestamp links
 ;;
 ;; Required configuration:
-;;   (setq chrome-server-youtube-api-key    "YOUR-API-KEY")
-;;   (setq chrome-server-youtube-videos-file "~/org/videos.org")
+;;   (setq chrome-server-youtube-api-key       "YOUR-API-KEY")
+;;   (setq chrome-server-youtube-videos-file   "~/org/videos.org")
 ;;   (setq chrome-server-youtube-transcript-dir "~/sync/youtube")
 ;;
-;; Payload (/youtube):
-;;   { "version": 1, "payload": { "url": "...", "title": "...", "text": "...", "raise": false } }
+;; Payload (YOUTUBE):
+;;   { "url": "...", "title": "...", "text": "...", "raise": false }
 ;;
-;; Payload (/youtube-transcript):
-;;   { "version": 1, "payload": { "url": "...", "title": "...", "raise": false } }
+;; Payload (YOUTUBE_TRANSCRIPT):
+;;   { "url": "...", "title": "...", "raise": false }
 
 ;;; Code:
 
 (require 'chrome-server)
 (require 'url-util)
 (require 'json)
+
+;; Forward declarations for dynamic vars and functions from org-capture/org.
+(defvar org-capture-templates)
+(declare-function org-display-inline-images "org" (&optional include-linked refresh beg end))
+(declare-function org-link-preview-region   "ol"  (&optional arg interactive? beg end))
+(declare-function org-capture               "org-capture" (&optional goto keys))
 
 ;; ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -181,19 +187,13 @@ OEMBED and API-INFO may be nil if the respective fetch failed."
             sel-text
             "\n")))
 
-;; ── /youtube endpoint ─────────────────────────────────────────────────────────
+;; ── YOUTUBE handler ───────────────────────────────────────────────────────────
 
-(defservlet youtube application/json (path query request)
-  "Handle POST /youtube — capture a YouTube video into the configured org file."
-  (condition-case err
-      (let* ((data    (chrome-server--parse-request request))
-             (payload (plist-get data :payload)))
-        (unless payload
-          (error "chrome-server-youtube: missing 'payload' key in request"))
-        (chrome-server--respond 200 "ok" "Video capture started")
-        (run-at-time 0 nil #'chrome-server-youtube--capture payload))
-    (error
-     (chrome-server--respond 500 "error" (error-message-string err)))))
+(defun chrome-server-youtube--handle-youtube (payload)
+  "Handle YOUTUBE request.  Respond-fast-then-defer."
+  (chrome-server--require-payload payload)
+  (chrome-server-defer #'chrome-server-youtube--capture payload)
+  (chrome-server--ok "Video capture started"))
 
 (defun chrome-server-youtube--capture (payload)
   "Capture a YouTube video from PAYLOAD into `chrome-server-youtube-videos-file'."
@@ -206,13 +206,19 @@ OEMBED and API-INFO may be nil if the respective fetch failed."
         (chrome-server--maybe-raise payload)
         (chrome-server-youtube--video-for-later url title text))
     (error
-     (message "chrome-server-youtube: capture failed: %s" (error-message-string err)))))
+     (chrome-server--warn "youtube capture failed: %s"
+                          (error-message-string err)))))
 
 (defun chrome-server-youtube--refresh-inline-images ()
   "Refresh inline images when visiting `chrome-server-youtube-videos-file'."
   (when (string-match (regexp-quote (expand-file-name chrome-server-youtube-videos-file))
                       (or (buffer-file-name) ""))
-    (org-display-inline-images)))
+    ;; org-display-inline-images was deprecated in Org 9.8.  Prefer
+    ;; org-link-preview-region when available; fall back to the legacy name.
+    (if (fboundp 'org-link-preview-region)
+        (org-link-preview-region nil nil (point-min) (point-max))
+      (with-suppressed-warnings ((obsolete org-display-inline-images))
+        (org-display-inline-images)))))
 
 (defun chrome-server-youtube--video-for-later (url title selection)
   "Capture YouTube video URL into `chrome-server-youtube-videos-file'.
@@ -221,14 +227,14 @@ Fetches metadata from oEmbed and the YouTube Data API, then runs org-capture."
          (api-info   (condition-case err
                          (chrome-server-youtube--fetch-api-info url)
                        (error
-                        (message "chrome-server-youtube: API fetch failed: %s"
-                                 (error-message-string err))
+                        (chrome-server--warn "API fetch failed (continuing without): %s"
+                                             (error-message-string err))
                         nil)))
          (oembed     (condition-case err
                          (chrome-server-youtube--fetch-oembed url)
                        (error
-                        (message "chrome-server-youtube: oEmbed fetch failed: %s"
-                                 (error-message-string err))
+                        (chrome-server--warn "oEmbed fetch failed (continuing without): %s"
+                                             (error-message-string err))
                         nil)))
          (entry-text (chrome-server-youtube--build-entry
                       url title selection oembed api-info video-id))
@@ -242,21 +248,15 @@ Fetches metadata from oEmbed and the YouTube Data API, then runs org-capture."
              :after-finalize chrome-server-youtube--refresh-inline-images))))
     (org-capture nil "v")))
 
-;; ── /youtube-transcript endpoint ──────────────────────────────────────────────
+;; ── YOUTUBE_TRANSCRIPT handler ────────────────────────────────────────────────
 
-(defservlet youtube-transcript application/json (path query request)
-  "Handle POST /youtube-transcript — save a YouTube transcript to org."
-  (condition-case err
-      (let* ((data    (chrome-server--parse-request request))
-             (payload (plist-get data :payload)))
-        (unless payload
-          (error "chrome-server-youtube: missing 'payload' key"))
-        (unless (plist-get payload :url)
-          (error "chrome-server-youtube: missing url in payload"))
-        (chrome-server--respond 200 "ok" "Transcript download started")
-        (run-at-time 0 nil #'chrome-server-youtube--transcript-download-and-save payload))
-    (error
-     (chrome-server--respond 500 "error" (error-message-string err)))))
+(defun chrome-server-youtube--handle-transcript (payload)
+  "Handle YOUTUBE_TRANSCRIPT request.  Respond-fast-then-defer."
+  (chrome-server--require-payload payload)
+  (unless (plist-get payload :url)
+    (error "chrome-server-youtube: missing url in payload"))
+  (chrome-server-defer #'chrome-server-youtube--transcript-download-and-save payload)
+  (chrome-server--ok "Transcript download started"))
 
 ;; ── yt-dlp helpers ───────────────────────────────────────────────────────────
 
@@ -396,7 +396,8 @@ timing tags, join all non-blank lines."
 ;; ── Transcript file I/O ───────────────────────────────────────────────────────
 
 (defun chrome-server-youtube--transcript-find-existing-dir (root video-id)
-  "Return full path of existing transcript directory for VIDEO-ID under ROOT, or nil."
+  "Return existing transcript directory for VIDEO-ID under ROOT.
+Returns nil when no matching directory is found."
   (unless (string= video-id "unknown")
     (car (seq-filter #'file-directory-p
                      (file-expand-wildcards (format "%s/*-%s-*" root video-id))))))
@@ -446,8 +447,8 @@ timing tags, join all non-blank lines."
           (when avail-auto
             (insert (format "Auto captions available: %s\n" (string-join avail-auto ", "))))))
     (error
-     (message "chrome-server-youtube: could not write stub: %s"
-              (error-message-string err)))))
+     (chrome-server--warn "could not write stub: %s"
+                          (error-message-string err)))))
 
 (defun chrome-server-youtube--transcript-download-and-save (payload)
   "Fetch info, download transcript for PAYLOAD's URL and save to org.
@@ -477,10 +478,16 @@ If no transcript is available, writes a stub org file and logs to *Messages*."
                                   (buffer-string)))
                    (api-info   (condition-case e
                                    (chrome-server-youtube--fetch-api-info url)
-                                 (error nil)))
+                                 (error
+                                  (chrome-server--warn "API fetch failed (continuing without): %s"
+                                                       (error-message-string e))
+                                  nil)))
                    (oembed     (condition-case e
                                    (chrome-server-youtube--fetch-oembed url)
-                                 (error nil)))
+                                 (error
+                                  (chrome-server--warn "oEmbed fetch failed (continuing without): %s"
+                                                       (error-message-string e))
+                                  nil)))
                    (entry      (replace-regexp-in-string
                                 "^\\* TODO " "* "
                                 (chrome-server-youtube--build-entry
@@ -499,7 +506,12 @@ If no transcript is available, writes a stub org file and logs to *Messages*."
             (chrome-server--maybe-raise payload)
             (message "chrome-server-youtube: transcript saved to %s" org-file))))
     (error
-     (message "chrome-server-youtube: transcript failed: %s" (error-message-string err)))))
+     (chrome-server--warn "transcript failed: %s" (error-message-string err)))))
+
+;; ── Register handlers ────────────────────────────────────────────────────────
+
+(chrome-server-register-handler "YOUTUBE"             #'chrome-server-youtube--handle-youtube)
+(chrome-server-register-handler "YOUTUBE_TRANSCRIPT"  #'chrome-server-youtube--handle-transcript)
 
 (provide 'chrome-server-youtube)
 (provide 'chrome-server-youtube-transcript)

@@ -1,7 +1,24 @@
 {
   "permissions": {
     "allow": [
-      "Bash(emacsclient *)"
+      "Bash(emacsclient *)",
+      "Bash(emacs --batch -Q -L /Users/dmg/.emacs.d/arm64/31.0.50/straight/build/websocket -L . --eval '\\(dolist \\(f \\(list \"chrome-server.el\" \"chrome-server-www.el\" \"chrome-server-chatgpt.el\" \"chrome-server-youtube.el\"\\)\\) \\(princ \\(format \"byte-compiling %s\\\\n\" f\\)\\) \\(or \\(byte-compile-file f\\) \\(kill-emacs 1\\)\\)\\)')",
+      "Bash(make lint *)",
+      "Bash(node *)",
+      "Bash(make package *)",
+      "Bash(make clean *)",
+      "Bash(unzip -l ../dist/chrome-server-extension-2.0.zip)",
+      "Bash(make build *)",
+      "Bash(unzip -l ../dist/*.zip)",
+      "Bash(file build/icons/*.png)",
+      "Bash(emacs --batch -Q -L /Users/dmg/.emacs.d/arm64/31.0.50/straight/build/websocket -L . --eval '\\(byte-compile-file \"chrome-server.el\"\\)')",
+      "Bash(emacs --batch -Q -L /Users/dmg/.emacs.d/arm64/31.0.50/straight/build/websocket -L . --eval '\\(dolist \\(f \\(list \"chrome-server.el\" \"chrome-server-www.el\" \"chrome-server-chatgpt.el\" \"chrome-server-youtube.el\"\\)\\) \\(or \\(byte-compile-file f\\) \\(kill-emacs 1\\)\\)\\)')",
+      "Bash(rm -f *.elc)",
+      "Bash(emacs --batch -Q -L /Users/dmg/.emacs.d/arm64/31.0.50/straight/build/websocket -L . --eval '\\(dolist \\(f \\(list \"chrome-server-www.el\" \"chrome-server-chatgpt.el\"\\)\\) \\(or \\(byte-compile-file f\\) \\(kill-emacs 1\\)\\)\\)')",
+      "Bash(file icons/*.png)",
+      "Bash(python3 -c \"import PIL; print\\('PIL ok:', PIL.__version__\\)\")",
+      "Bash(python3 -c \"from PIL import Image; print\\('PIL ok'\\)\")",
+      "Bash(python3 scripts/make-red-icons.py)"
     ]
   }
 }

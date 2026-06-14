@@ -1,344 +1,228 @@
 #+title: chrome-server
 #+author: Daniel M. German
 
-A local HTTP server that receives requests from a Chrome extension and
-dispatches them to Emacs actions such as org-capture, org-roam capture,
-eww browsing, web page archiving, and ChatGPT conversation saving.
+A two-way bridge between Emacs and Chrome.  Right-click on a page in
+Chrome and have it land in Emacs (org-capture, save-page, archive a
+ChatGPT conversation, catch a YouTube video for later).  Going the
+other way: from Emacs ask the browser things (what tabs are open?
+what's the page title?  what's the video's current time?) and act on
+them.
 
-* Overview
+For everything beneath the surface — adding new actions, the wire
+protocol, the JSON schemas — see =CONTRIBUTING.org=.
 
-=chrome-server= starts a lightweight HTTP server (via =simple-httpd=) on
-=localhost:9129=. A companion Chrome extension — =emacsProtocol2= — sends JSON
-requests to it when you invoke actions from the browser context menu or popup.
+* What you get
 
-* Module structure
+** Right-click in Chrome
 
-| File                        | Purpose                                              |
-|-----------------------------+------------------------------------------------------|
-| =chrome-server.el=          | Core: server lifecycle, shared helpers, org-capture, org-roam-capture, eww |
-| =chrome-server-chatgpt.el=  | Backend for =/chatgpt=: saves ChatGPT conversations  |
-| =chrome-server-www.el=      | Backend for =/save-page=: archives web pages         |
-| =chrome-server-youtube.el=  | Backend for =/youtube=: captures YouTube videos into =videos.org= |
+| Menu item                              | Where it shows               | What it does                                       |
+|----------------------------------------+------------------------------+----------------------------------------------------|
+| Emacs: org-capture from selection      | right-click on selected text | opens =org-capture= seeded with the selection      |
+| Emacs: org-roam-capture from selection | right-click on selected text | opens =org-roam-capture=                            |
+| Emacs: open in eww                     | any page or link             | opens the URL in =eww= inside Emacs                |
+| Emacs: save page                       | any page                     | archives the main content as an org file           |
+| Emacs: save ChatGPT conversation       | chatgpt.com pages            | saves the whole conversation as org                |
+| Emacs: add video for later             | YouTube pages / links        | drops a TODO with metadata into your videos file   |
+| Emacs: save transcript                 | YouTube pages / links        | runs =yt-dlp= and writes a clickable-timestamp org |
 
-* Requirements
+You can also bind keyboard shortcuts to any of these at
+=chrome://extensions/shortcuts=.  A few are pre-suggested:
 
-- [[https://github.com/skeeto/simple-httpd][simple-httpd]] (installed via =use-package=)
-- =pandoc= on your =$PATH= (for HTML → org conversion)
-- =org-roam= (for capture endpoints)
-- The =emacsProtocol2= Chrome extension loaded in your browser
+- =Ctrl+Shift+C= → org-capture
+- =Ctrl+Shift+R= → org-roam-capture
+- =Ctrl+Shift+W= → open in eww
+- =Ctrl+Shift+G= → save ChatGPT conversation
 
-* Installation
+The remaining commands are declared but unbound — Chrome only honors
+four default-bound shortcuts per extension, so you set the rest yourself.
 
-The server is loaded and started automatically via =dmg-ai.org=:
+** The toolbar icon
+
+Purple = neutral.  *Red* = this tab has granted Emacs permission to
+evaluate JavaScript on it.  When you close the tab the permission dies
+with it.
+
+** The popup (click the toolbar icon)
+
+- Connection status to Emacs (●  Connected / Connecting… / Disconnected).
+- A one-line summary of this tab's eval permission, with buttons to
+  grant for 1 hour, grant until tab closes, or revoke.
+- A button for each menu action so you can fire them without
+  right-clicking.
+- A "Tabs with permission" list — every tab where you've granted eval
+  rights, with title, time remaining, and a *Revoke* button.  Click a
+  row to jump to that tab.
+
+** From inside Emacs
+
+Send the browser a small JavaScript snippet, get the value back, all
+inside an org buffer:
+
+#+begin_src chrome-js
+document.querySelector('video').currentTime
+#+end_src
+
+This runs against your active Chrome tab.  The first time it does, the
+page paints a small overlay asking you to grant permission — read the
+code, click Allow.
+
+Same thing from elisp:
 
 #+begin_src emacs-lisp
+(chrome-server-request "EVAL_IN_ACTIVE_TAB"
+                       '(:code "document.querySelector('video').currentTime"))
+#+end_src
+
+Useful patterns:
+
+#+begin_src emacs-lisp
+;; List every open tab as title/url pairs
+(mapcar (lambda (tab) (cons (plist-get tab :title) (plist-get tab :url)))
+        (chrome-server-request "GET_ALL_TABS" nil))
+
+;; Jump to a tab by id
+(chrome-server-request "FOCUS_TAB" '(:id 1234 :focusWindow t))
+
+;; Open a new tab
+(chrome-server-request "OPEN_TAB" '(:url "https://example.com"))
+#+end_src
+
+* Setup
+
+** Requirements
+
+Core (always needed):
+
+- Emacs with the =websocket= package available.
+- Chrome or Chromium.
+
+Per-feature.  Each row is needed *only* if you actually invoke that
+feature; the rest of the bridge keeps working without it.
+
+| Feature                            | Needed                            | What "missing" looks like                                  |
+|------------------------------------+-----------------------------------+-------------------------------------------------------------|
+| =ORG_ROAM_CAPTURE= action          | =org-roam= package                | Errors when the user picks the org-roam-capture menu item   |
+| =SAVE_PAGE= / =CHATGPT=            | =pandoc= on =$PATH=               | Errors at save time; the right-click action fails          |
+| =YOUTUBE_TRANSCRIPT=               | =yt-dlp= on =$PATH=               | Errors at fetch time                                        |
+| Rich =YOUTUBE= metadata            | YouTube Data API v3 key           | Capture still works, but without title/duration/description |
+| Optional Emacs-side modules        | corresponding =(require …)= in the use-package =:config= | Their handlers aren't registered; that name returns "Unknown request" |
+
+If you don't load a module (e.g. don't =(require 'chrome-server-youtube)=),
+none of its external dependencies are needed at all.
+
+** Emacs
+
+One =use-package= form for the core, with each optional feature pulled
+in by a =require= you can comment out:
+
+#+begin_src emacs-lisp
+(use-package websocket :ensure t)
+
 (use-package chrome-server
-  :straight nil
-  :load-path "~/.emacs.d/modules/chrome-server"
-  :after simple-httpd
+  :load-path "/path/to/chrome-server"
+  :after websocket
   :config
+  (require 'chrome-server-www)      ; SAVE_PAGE        (web archive)
+  (require 'chrome-server-chatgpt)  ; CHATGPT          (save conversation)
+  (require 'chrome-server-youtube)  ; YOUTUBE + YOUTUBE_TRANSCRIPT
+  (require 'chrome-server-babel)    ; org-babel chrome-js blocks
   (chrome-server-start))
-
-(use-package chrome-server-chatgpt
-  :straight nil
-  :load-path "~/.emacs.d/modules/chrome-server"
-  :after chrome-server)
-
-(use-package chrome-server-www
-  :straight nil
-  :load-path "~/.emacs.d/modules/chrome-server"
-  :after chrome-server)
-
-(use-package chrome-server-youtube
-  :straight nil
-  :load-path "~/.emacs.d/modules/chrome-server"
-  :after chrome-server)
 #+end_src
 
-To start or stop the server manually:
+Drop any =require= line you don't want — the bridge starts with just
+the three baseline handlers (=ORG_CAPTURE=, =ORG_ROAM_CAPTURE=, =EWW=)
+that =chrome-server.el= itself registers.
 
-#+begin_src emacs-lisp
-(chrome-server-start)
-(chrome-server-stop)
-#+end_src
+The server binds =127.0.0.1:9130=.  =(chrome-server-stop)= / =-start=
+control it manually.  =(setq chrome-server-debug t)= logs every frame
+to =*chrome-server*= when something looks off.
 
-* Endpoints
+A few variables you'll likely want to set:
 
-| Endpoint                  | File                       | Description                                              |
-|---------------------------+----------------------------+----------------------------------------------------------|
-| =POST /org-capture=       | =chrome-server.el=         | Opens org-capture with configurable template key         |
-| =POST /org-roam-capture=  | =chrome-server.el=         | Opens org-roam-capture with interactive template selection |
-| =POST /eww=               | =chrome-server.el=         | Opens the URL in eww                                     |
-| =POST /save-page=         | =chrome-server-www.el=     | Saves main page content to =~/sync/www-archive/=         |
-| =POST /youtube=           | =chrome-server-youtube.el= | Captures a YouTube video into =videos.org=               |
-| =POST /chatgpt=           | =chrome-server-chatgpt.el= | Saves a ChatGPT conversation to =~/sync/chatgpt/=        |
+| Variable                                | Purpose                                       |
+|-----------------------------------------+-----------------------------------------------|
+| =chrome-server-www-archive-dir=         | where save-page writes archived pages         |
+| =chrome-server-chatgpt-dir=             | where save-chatgpt writes conversations       |
+| =chrome-server-youtube-videos-file=     | org file the YouTube capture appends to       |
+| =chrome-server-youtube-transcript-dir=  | where transcripts land                        |
+| =chrome-server-youtube-api-key=         | YouTube Data API v3 key (for video metadata)  |
+| =chrome-server-org-capture-key=         | org-capture template key for browser captures |
 
-All endpoints expect:
+The full list is in =CONTRIBUTING.org=.
 
-#+begin_src json
-{ "version": 1, "payload": { ... } }
-#+end_src
-
-** =/org-capture= and =/org-roam-capture= payload
-
-#+begin_src json
-{ "url": "https://...", "title": "Page title", "text": "Selected text", "raise": true }
-#+end_src
-
-** =/eww= payload
-
-#+begin_src json
-{ "url": "https://...", "raise": true }
-#+end_src
-
-** =/save-page= payload
-
-The extension extracts the main content area (=<main>=, =<article>=,
-=[role=main]=, or =<body>=) and sends:
-
-#+begin_src json
-{ "url": "https://...", "title": "Page title", "html": "<p>...</p>", "raise": false }
-#+end_src
-
-** =/youtube= payload
-
-#+begin_src json
-{ "url": "https://www.youtube.com/watch?v=...", "title": "Video title", "text": "Selected text", "raise": false }
-#+end_src
-
-The action calls =dmg-www-video-for-later= (defined in =dmg-www.org=), which fetches
-metadata via the YouTube oEmbed and Data APIs, then captures the entry into =videos.org=.
-
-** =/chatgpt= payload
-
-#+begin_src json
-{
-  "url": "https://chatgpt.com/c/<id>",
-  "title": "Conversation title",
-  "raise": false,
-  "turns": [
-    { "role": "user",      "html": "<p>...</p>", "text": "..." },
-    { "role": "assistant", "html": "<p>...</p>", "text": "..." }
-  ]
-}
-#+end_src
-
-** The =raise= field
-
-Every payload may include a boolean =raise= field. When =true=, Emacs
-raises its window and steals focus after handling the request. The
-default per action is configured in the extension's Options page.
-
-* Saved file formats
-
-** Web page archive (=/save-page=)
-
-Files are saved to =~/sync/www-archive/= (configurable via
-=chrome-server-www-archive-dir=). Each saved page gets its own directory:
-
-#+begin_example
-~/sync/www-archive/
-  20260523-115058-<sanitized-title>/
-    20260523-115058-<sanitized-title>.org
-    20260523-115058-<sanitized-title>.html
-    image1.png
-    image2.jpg
-    ...
-#+end_example
-
-The =.org= file starts with:
-
-#+begin_example
-#+title: <page title>
-#+source_url: <url>
-#+created: <timestamp>
-
-[[<url>][<title>]]
-
-<pandoc-converted body>
-#+end_example
-
-A new directory is always created (web pages have no stable identifier).
-
-** ChatGPT conversations (=/chatgpt=)
-
-Conversations are saved to =~/sync/chatgpt/= (configurable via
-=chrome-server-chatgpt-dir=). Each conversation gets its own directory:
-
-#+begin_example
-~/sync/chatgpt/
-  20260523-115058-<conversation-id>-<sanitized-title>/
-    20260523-115058-<conversation-id>-<sanitized-title>.org
-    20260523-115058-<conversation-id>-<sanitized-title>.html
-    image1.png
-    ...
-#+end_example
-
-Capturing the same conversation a second time refreshes the existing
-directory rather than creating a new one (matched by conversation ID).
-
-User turns become =**= headings (first 100 characters; full text in
-body if truncated). Assistant turns are plain body text.
-
-In both cases, HTML is converted to org via =pandoc=. Embedded images
-(including data URIs) are extracted to the same directory via pandoc's
-=--extract-media= flag. Invisible HTML anchors that pandoc emits as
-=<<target>>= radio targets are stripped automatically.
-
-* Configuration
-
-| Variable                            | Default              | Description                                         |
-|-------------------------------------+----------------------+-----------------------------------------------------|
-| =chrome-server-port=                | =9129=               | Port the server listens on                          |
-| =chrome-server-org-capture-key=     | =nil=                | Org-capture key for =/org-capture=; nil = interactive |
-| =chrome-server-chatgpt-dir=         | =~/sync/chatgpt=     | Directory for saved ChatGPT conversations           |
-| =chrome-server-www-archive-dir=     | =~/sync/www-archive= | Directory for saved web pages                       |
-| =chrome-server-pandoc-executable=   | =pandoc=             | Path to the pandoc binary                           |
-
-Example: pin =/org-capture= to a specific template and keep pandoc in a
-non-standard location:
-
-#+begin_src emacs-lisp
-(setq chrome-server-org-capture-key "w"
-      chrome-server-pandoc-executable "/opt/homebrew/bin/pandoc")
-#+end_src
-
-* Adding new handlers
-
-A handler is a pair: a =defservlet= that registers the HTTP endpoint and a
-=defun= that performs the Emacs-side action.
-
-=defservlet= is a macro from =simple-httpd=. The name becomes the URL path
-automatically — =(defservlet foo ...)= handles =POST /foo=. The servlet
-should parse the request, send a response immediately, then defer any
-interactive work with =run-at-time= so the HTTP response is not blocked.
-
-The pattern used throughout this package (=chrome-server--org-roam-capture=
-is a minimal reference example):
-
-#+begin_src emacs-lisp
-;; 1. Register the endpoint.
-(defservlet my-endpoint application/json (path query request)
-  (condition-case err
-      (let* ((data    (chrome-server--parse-request request))
-             (payload (plist-get data :payload)))
-        (unless payload
-          (error "chrome-server: missing 'payload' key in request"))
-        (chrome-server--respond 200 "ok" "Action started")
-        ;; Defer interactive work — the HTTP response must be sent first.
-        (run-at-time 0 nil #'chrome-server--my-action payload))
-    (error
-     (chrome-server--respond 500 "error" (error-message-string err)))))
-
-;; 2. Implement the action.
-(defun chrome-server--my-action (payload)
-  (let ((url   (plist-get payload :url))
-        (title (plist-get payload :title)))
-    (chrome-server--maybe-raise payload)
-    ;; ... do something in Emacs ...
-    ))
-#+end_src
-
-Call =(chrome-server--maybe-raise payload)= in the action function if
-the action should optionally focus Emacs (respects the =raise= field).
-
-For a backend specific to one site or use-case (like
-=chrome-server-chatgpt.el=), create a new file in
-=modules/chrome-server/=, =(require 'chrome-server)= at the top, and
-load it with a separate =use-package= block in =dmg-ai.org=.
-
-* Debugging a new endpoint
-
-** Reload without restarting Emacs
-
-After editing a handler file, reload it with:
+** Extension
 
 #+begin_src bash
-emacsclient -e '(load-file "~/.emacs.d/modules/chrome-server/chrome-server-www.el")'
+cd extension
+make load          # builds, opens chrome://extensions, copies the
+                   # build path to your clipboard (macOS)
 #+end_src
 
-** Test with curl
+In Chrome:
 
-Use =curl= to send a POST request directly, without involving the Chrome
-extension. This lets you isolate Emacs-side problems from extension problems.
+1. Turn on Developer mode (top right).
+2. Click "Load unpacked", paste the build path (=extension/build/=).
+3. Click Details → toggle *Allow User Scripts* on (only needed if you
+   want =EVAL_IN_ACTIVE_TAB= / =chrome-js= blocks to work).
 
-Minimal request:
+The popup should turn green within a few seconds.  If not, click
+*Reconnect*.
 
-#+begin_src bash
-curl -s -X POST http://localhost:9129/my-endpoint \
-  -H "Content-Type: application/json" \
-  -d '{"version":1,"payload":{"url":"https://example.com","title":"Test","raise":false}}'
-#+end_src
+** Customising
 
-A successful response:
+Most things are reachable from the popup → Options page (or
+=chrome://extensions= → Chrome Server → Extension options):
 
-#+begin_src json
-{"status":"ok","message":"...","data":"null"}
-#+end_src
+- *Raise Emacs* — a checkbox per action.  When checked, Emacs comes to
+  the foreground after that action completes.  Lives in browser
+  storage, overrides the bundled defaults without rebuilding.
+- *Menus* / *Handlers* — raw JSON editors if you want to add or
+  customize beyond what the bundled config gives you.
 
-An error response:
+Bigger changes (new menus, new content scripts, etc.) live in
+=extension/config.json=.  =CONTRIBUTING.org= covers the schema.
 
-#+begin_src json
-{"status":"error","message":"chrome-server: ...","data":"null"}
-#+end_src
+* Security in plain terms
 
-** Check the Emacs message log
+Three independent off-switches in =chrome://extensions=, biggest to
+smallest hammer:
 
-Error details and warnings from =message= calls appear in the =*Messages*=
-buffer. Open it with =M-x view-echo-area-messages= or =C-h e=.
+1. *Developer mode* off → the entire extension stops.  Nothing works.
+2. *Allow User Scripts* off (per-extension Details toggle) → only JS
+   eval is blocked.  Right-click menus, save-page, tab listing all
+   keep working.
+3. *Per-tab consent prompt* (always on) → the first =chrome-js= eval on
+   any new tab shows you the code and asks for permission.  Three
+   options: Deny / Allow 1 hour / Allow this tab.  Closing the tab
+   revokes consent.
 
-** Isolate extension vs. server problems
+The toolbar icon turns red on tabs you've granted eval permission, and
+the popup lists every consented tab so you can revoke without hunting.
 
-If =curl= succeeds but the extension fails, the problem is in the JavaScript
-side — check the browser console on the relevant tab and the background service
-worker console at =chrome://extensions= → /Inspect views: service worker/.
+There is no authentication on the WebSocket — anything that can dial
+=127.0.0.1:9130= as your user can drive Emacs through the bridge.
+That's the same trust boundary as any other local daemon.
 
-If =curl= also fails, the problem is in =chrome-server.el= or the backend file.
+For the deeper threat model and what's /not/ protected, see
+=CONTRIBUTING.org=.
 
-* Chrome extension (=emacsProtocol2=)
+* Troubleshooting
 
-The extension lives at =~/.emacs.d/../git.dmg/chrome-extensions/emacsProtocol2/=.
-Load it in Chrome via =chrome://extensions= → /Load unpacked/.
+| Symptom                                   | First thing to try                                                            |
+|-------------------------------------------+-------------------------------------------------------------------------------|
+| Popup shows Disconnected                  | Click Reconnect.  If still red: reload the extension card in =chrome://extensions=.  If still red: =M-x chrome-server-start=. |
+| =EVAL_IN_ACTIVE_TAB= errors                | Toggle *Allow User Scripts* on in extension Details.                          |
+| Consent overlay never appears             | =chrome://=, =chrome-extension://=, and the Web Store refuse eval — Chrome policy. |
+| "no client connected" from elisp          | Extension isn't connected.  Check the popup; reload if needed.                |
+| =chrome-server-start= says "address in use" | Another process is already on 9130.  =lsof -nP -iTCP:9130 -sTCP:LISTEN= to see which. |
+| Save-page produces no notification        | Check =*Messages*=; the handler logs success/failure there.                    |
 
-** Popup
+* Need to add a new action or hack the wire?
 
-Clicking the toolbar icon opens a popup with three sections:
+See =CONTRIBUTING.org=.  It covers the full configuration schema, the
+JSON shapes Emacs and the browser exchange, the build pipeline, and
+how to extend either side.
 
-- *Capture* — org-capture from page / selection; org-roam-capture from page / selection
-- *Page* — open in eww; save page to archive
-- *ChatGPT* — save conversation (only enabled on =chatgpt.com=)
-
-** Context menu
-
-Right-clicking any page shows:
-
-| Item                                        | Endpoint           | Trigger    |
-|---------------------------------------------+--------------------+------------|
-| /Emacs: org-capture from selection/         | =/org-capture=     | selection  |
-| /Emacs: org-roam-capture from selection/    | =/org-roam-capture= | selection  |
-| /Emacs: open in eww/                        | =/eww=             | page       |
-| /Emacs: save page/                          | =/save-page=       | page       |
-| /Emacs: save ChatGPT conversation/          | =/chatgpt=         | page (chatgpt.com only) |
-| /Emacs: add video for later/                | =/youtube=         | page (youtube.com / youtu.be only) |
-
-Custom endpoints added via the Options page also appear in the context menu.
-
-** Options page
-
-Open via =chrome://extensions= → /Emacs Protocol/ → /Details/ → /Extension options/,
-or right-click the toolbar icon → /Options/.
-
-- *Built-in Actions table* — toggle the /Raise Emacs/ default for each built-in action.
-- *Custom Endpoints* — add endpoints with label, server path, source
-  (=selection=, =full page=, or =URL only=), and raise default. Custom
-  endpoints appear in the context menu automatically.
-
-** Badge feedback
-
-After every action the extension toolbar icon shows a brief badge:
-
-- Green =✓= — Emacs acknowledged the request successfully.
-- Red =!= + desktop notification — an error occurred (e.g. server not
-  running, pandoc failed).
-
-The badge disappears after 3 seconds (errors stay for 5 seconds).
+For weird debugging stories that aren't otherwise documented (MV3
+setIcon quirks, IPv6 localhost, lexical-binding + org-capture, YouTube
+PoToken gating, …) see =ai/gotchas.md=.

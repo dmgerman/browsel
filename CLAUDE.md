@@ -1,0 +1,79 @@
+# chrome-server
+
+Bidirectional WebSocket bridge between Emacs and a Chrome MV3 extension
+on `127.0.0.1:9130`.  Replaces the previous HTTP-on-9129 design.  Full
+architecture, request catalog, and configuration schema live in
+`README.org` — start there for anything substantive.
+
+## Rules
+
+- **Never commit.**  Tell the user when changes are ready; they commit.
+- **Never modify `spookfox/` or `emacsProtocol/`** — frozen reference
+  material.  They're checked into the tree on purpose so you can read
+  the wire protocol and the old extension; if either ever needs an
+  update, ask first.
+- **Edit only `extension/`, never `extension/build/`.**  The build dir
+  is gitignored and regenerated from sources by `make build`.
+
+## Source map
+
+| Path                              | Owns                                                        |
+|-----------------------------------|-------------------------------------------------------------|
+| `chrome-server.el`                | Server lifecycle, JSON frame dispatch, async/sync request primitives, shared helpers, `ORG_CAPTURE` / `ORG_ROAM_CAPTURE` / `EWW` handlers |
+| `chrome-server-www.el`            | `SAVE_PAGE`                                                 |
+| `chrome-server-chatgpt.el`        | `CHATGPT`                                                   |
+| `chrome-server-youtube.el`        | `YOUTUBE`, `YOUTUBE_TRANSCRIPT`                              |
+| `chrome-server-babel.el`          | `org-babel-execute:chrome-js`                               |
+| `extension/config.json`           | The single source of truth for the extension (manifest infra, menus, handlers, content scripts) |
+| `extension/src/`                  | Extension JS (service worker, offscreen, popup, options, content scripts, consent) |
+| `extension/html/` / `icons/`      | Extension HTML + icons                                       |
+| `extension/scripts/`              | `build-manifest.py`, `make-red-icons.py`                    |
+| `extension/Makefile`              | `make build` / `make load` / `make package` / `make lint`    |
+
+## Build / verify cycle
+
+```bash
+# Extension changes:
+cd extension && make build      # also runs `make lint`
+                                # generated manifest.json lands in build/
+
+# Elisp changes — byte-compile to catch warnings before reload.
+# Either let package.el resolve `websocket`:
+emacs --batch -Q --eval '(progn (require (quote package)) (package-initialize))' -L . \
+  --eval '(dolist (f (list "chrome-server.el" "chrome-server-www.el" \
+                           "chrome-server-chatgpt.el" "chrome-server-youtube.el" \
+                           "chrome-server-babel.el")) \
+           (or (byte-compile-file f) (kill-emacs 1)))'
+# ...or add the websocket package's directory with `-L` if the user uses
+# straight.el or similar:  -L <path-to-websocket>
+
+# Reload in the user's running Emacs:
+emacsclient -e '(progn (chrome-server-stop) \
+                       (load-file "chrome-server.el") \
+                       (chrome-server-start))'
+
+# Confirm the WS is reachable:
+lsof -nP -iTCP:9130 -sTCP:LISTEN
+```
+
+After a manifest-affecting change the user must reload the extension
+card in `chrome://extensions` — `make build` alone doesn't restart Chrome.
+
+## Further reading for you
+
+- `README.org` — comprehensive user-facing docs.
+- `ai/spookfox-like.md` — the original design rationale.  Use as
+  historical context if a decision seems weird.
+- `ai/gotchas.md` — non-obvious failure modes encountered during the build
+  that aren't documented elsewhere.  Read before debugging.
+- `~/.claude/skills/chrome-server/` — how to *use* the bridge from a
+  Claude Code session (read tabs, eval JS, etc.).  Distinct from
+  building the bridge itself.
+
+## When uncertain
+
+Default to `README.org`; if it's not in there, ask.  Don't infer wire
+protocol shapes or handler semantics — the parts are wired together
+deliberately and silent guessing has cost us hours in the past
+(IPv6 localhost, MV3 setIcon, lexical-binding capture variables).  All
+written down in `ai/gotchas.md`.

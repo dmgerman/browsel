@@ -1,22 +1,22 @@
-;;; chrome-server-www.el --- Web page archiving backend for chrome-server
+;;; chrome-server-www.el --- Web page archiving backend for chrome-server  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Daniel M. German <dmg@turingmachine.org>
 
 ;; Author: Daniel M. German <dmg@turingmachine.org>
 ;; Maintainer: Daniel M. German <dmg@turingmachine.org>
-;; Keywords: browser, http, org, archive
+;; Keywords: browser, websocket, org, archive
 ;; Homepage: https://github.com/dmgerman
 
 ;;; Commentary:
 
-;; Web page archiving backend for chrome-server.
-;; Provides the POST /save-page endpoint which saves the main content of any
-;; web page to ~/sync/www-archive/<basename>/ as both an HTML file and an org
-;; file (converted via pandoc).  Embedded images are extracted to the same
+;; Web page archiving backend for chrome-server.  Registers the SAVE_PAGE
+;; WebSocket request handler which saves the main content of any web page
+;; to ~/sync/www-archive/<basename>/ as both an HTML file and an org file
+;; (converted via pandoc).  Embedded images are extracted to the same
 ;; directory by pandoc's --extract-media flag.
 ;;
 ;; Payload:
-;;   { "version": 1, "payload": { "url": "...", "title": "...", "html": "..." } }
+;;   { "url": "...", "title": "...", "html": "..." }
 
 ;;; Code:
 
@@ -27,26 +27,25 @@
 (defvar chrome-server-www-archive-dir "~/sync/www-archive"
   "Directory where saved web pages are stored.")
 
-;; ── Endpoint ─────────────────────────────────────────────────────────────────
+;; ── Handler ──────────────────────────────────────────────────────────────────
 
-(defservlet save-page application/json (path query request)
-  "Handle POST /save-page — save main page content to ~/sync/www-archive/."
-  (condition-case err
-      (let* ((data    (chrome-server--parse-request request))
-             (payload (plist-get data :payload)))
-        (unless payload
-          (error "chrome-server-www: missing 'payload' key in request"))
-        (let ((file (chrome-server-www--save payload)))
-          (chrome-server--respond 200 "ok" (format "Saved to %s" file))))
-    (error
-     (chrome-server--respond 500 "error" (error-message-string err)))))
+(defun chrome-server-www--handle-save-page (payload)
+  "Handle SAVE_PAGE request with PAYLOAD.
+Honours :raise after the page has been written to disk — same field as
+the interactive handlers, but applied at task completion rather than at
+buffer open."
+  (chrome-server--require-payload payload)
+  (let ((file (chrome-server-www--save payload)))
+    (chrome-server--maybe-raise payload)
+    (chrome-server--ok (format "Saved to %s" file))))
 
 ;; ── Page saving ───────────────────────────────────────────────────────────────
 
 (defun chrome-server-www--save (payload)
-  "Save web page PAYLOAD to a per-item directory under `chrome-server-www-archive-dir'.
-Each save creates a new directory named <timestamp>-<title>/ containing
-<basename>.org, <basename>.html, and any extracted images.
+  "Save web page PAYLOAD to a per-item directory under the archive root.
+The root is `chrome-server-www-archive-dir'.  Each save creates a new
+directory named <timestamp>-<title>/ containing <basename>.org,
+<basename>.html, and any extracted images.
 Returns the path of the org file written."
   (let* ((url      (plist-get payload :url))
          (title    (or (plist-get payload :title) "web-page"))
@@ -69,8 +68,8 @@ Returns the path of the org file written."
         (with-temp-file html-file
           (insert html))
       (error
-       (message "chrome-server-www: could not save HTML file %s: %s"
-                html-file (error-message-string err))))
+       (chrome-server--warn "could not save HTML file %s: %s"
+                            html-file (error-message-string err))))
     (condition-case err
         (with-temp-file file
           (insert (format "#+title: %s\n" title))
@@ -80,8 +79,8 @@ Returns the path of the org file written."
           (insert (condition-case err
                       (chrome-server-www--html-to-org html page-dir)
                     (error
-                     (message "chrome-server-www: HTML conversion failed, inserting plain text: %s"
-                              (error-message-string err))
+                     (chrome-server--warn "HTML conversion failed, inserting plain text: %s"
+                                          (error-message-string err))
                      html))))
       (error
        (error "chrome-server-www: could not write org file %s: %s"
@@ -95,12 +94,13 @@ Signals an error if pandoc is not found or exits non-zero."
   (unless (executable-find chrome-server-pandoc-executable)
     (error "chrome-server-www: pandoc not found (set chrome-server-pandoc-executable)"))
   (with-temp-buffer
-    (let ((exit-code (call-process-region html nil
-                                          chrome-server-pandoc-executable
-                                          nil t nil
-                                          "-f" "html" "-t" "org"
-                                          "--wrap=none"
-                                          (format "--extract-media=%s" media-dir))))
+    (let ((exit-code (call-process-region
+                      (chrome-server--strip-svg html) nil
+                      chrome-server-pandoc-executable
+                      nil t nil
+                      "-f" "html" "-t" "org"
+                      "--wrap=none"
+                      (format "--extract-media=%s" media-dir))))
       (unless (zerop exit-code)
         (error "chrome-server-www: pandoc failed (exit %d): %s"
                exit-code (buffer-string)))
@@ -119,6 +119,10 @@ Signals an error if pandoc is not found or exits non-zero."
          (s (replace-regexp-in-string "[^a-z0-9]+" "-" s))
          (s (replace-regexp-in-string "^-+\\|-+$" "" s)))
     (truncate-string-to-width s 40)))
+
+;; ── Register handler ─────────────────────────────────────────────────────────
+
+(chrome-server-register-handler "SAVE_PAGE" #'chrome-server-www--handle-save-page)
 
 (provide 'chrome-server-www)
 

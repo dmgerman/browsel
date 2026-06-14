@@ -1,23 +1,23 @@
-;;; chrome-server-chatgpt.el --- ChatGPT backend for chrome-server
+;;; chrome-server-chatgpt.el --- ChatGPT backend for chrome-server  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Daniel M. German <dmg@turingmachine.org>
 
 ;; Author: Daniel M. German <dmg@turingmachine.org>
 ;; Maintainer: Daniel M. German <dmg@turingmachine.org>
-;; Keywords: browser, http, org, chatgpt
+;; Keywords: browser, websocket, org, chatgpt
 ;; Homepage: https://github.com/dmgerman
 
 ;;; Commentary:
 
-;; ChatGPT-specific backend for chrome-server.
-;; Provides the POST /chatgpt endpoint which saves a full ChatGPT conversation
-;; to ~/sync/chatgpt/<basename>/ as an org file, converting HTML turns via
+;; ChatGPT-specific backend for chrome-server.  Registers the CHATGPT
+;; WebSocket request handler, which saves a full ChatGPT conversation to
+;; ~/sync/chatgpt/<basename>/ as an org file, converting HTML turns via
 ;; pandoc.  Embedded images are extracted to the same directory.
 ;; Recapturing the same conversation refreshes the existing directory.
 ;;
 ;; Payload:
-;;   { "version": 1, "payload": { "url": "...", "title": "...",
-;;     "turns": [ { "role": "...", "html": "...", "text": "..." } ] } }
+;;   { "url": "...", "title": "...",
+;;     "turns": [ { "role": "...", "html": "...", "text": "..." } ] }
 
 ;;; Code:
 
@@ -27,22 +27,9 @@
 
 (defvar chrome-server-chatgpt-dir "~/sync/chatgpt"
   "Directory where ChatGPT conversation org files are saved.")
-
-(defvar chrome-server-pandoc-executable "pandoc"
-  "Path to the pandoc executable used for HTML → org conversion.")
+;; chrome-server-pandoc-executable is defined in chrome-server.el (shared with -www).
 
 ;; ── HTML → Org conversion ─────────────────────────────────────────────────────
-
-(defun chrome-server-chatgpt--strip-svg (html)
-  "Remove all <svg>...</svg> elements from HTML string."
-  (with-temp-buffer
-    (insert html)
-    (goto-char (point-min))
-    (while (re-search-forward "<svg[[:space:]\n][^>]*>" nil t)
-      (let ((start (match-beginning 0)))
-        (when (re-search-forward "</svg>" nil t)
-          (delete-region start (point)))))
-    (buffer-string)))
 
 (defun chrome-server-chatgpt--min-heading-level (html)
   "Return the smallest HTML heading level (1-6) found in HTML, or nil if none."
@@ -68,7 +55,7 @@ Signals an error if pandoc is not found or exits non-zero."
   (with-temp-buffer
     (let* ((min-lvl (chrome-server-chatgpt--min-heading-level html))
            (shift   (if min-lvl (- 3 min-lvl) 0))
-           (exit-code (call-process-region (chrome-server-chatgpt--strip-svg html) nil
+           (exit-code (call-process-region (chrome-server--strip-svg html) nil
                                           chrome-server-pandoc-executable
                                           nil t nil
                                           "-f" "html" "-t" "org"
@@ -90,19 +77,15 @@ Signals an error if pandoc is not found or exits non-zero."
         (replace-match ""))
       (buffer-string))))
 
-;; ── Endpoint ─────────────────────────────────────────────────────────────────
+;; ── Handler ──────────────────────────────────────────────────────────────────
 
-(defservlet chatgpt application/json (path query request)
-  "Handle POST /chatgpt — save a ChatGPT conversation to ~/sync/chatgpt/."
-  (condition-case err
-      (let* ((data    (chrome-server--parse-request request))
-             (payload (plist-get data :payload)))
-        (unless payload
-          (error "chrome-server-chatgpt: missing 'payload' key in request"))
-        (let ((file (chrome-server-chatgpt--save payload)))
-          (chrome-server--respond 200 "ok" (format "Saved to %s" file))))
-    (error
-     (chrome-server--respond 500 "error" (error-message-string err)))))
+(defun chrome-server-chatgpt--handle-chatgpt (payload)
+  "Handle CHATGPT request with PAYLOAD.
+Honours :raise after the conversation has been written to disk."
+  (chrome-server--require-payload payload)
+  (let ((file (chrome-server-chatgpt--save payload)))
+    (chrome-server--maybe-raise payload)
+    (chrome-server--ok (format "Saved to %s" file))))
 
 ;; ── Conversation saving ───────────────────────────────────────────────────────
 
@@ -142,8 +125,8 @@ Converts :html via pandoc (extracting images to CONV-DIR); falls back to :text."
                     (condition-case err
                         (chrome-server-chatgpt--html-to-org html conv-dir)
                       (error
-                       (message "chrome-server-chatgpt: HTML conversion failed, using plain text: %s"
-                                (error-message-string err))
+                       (chrome-server--warn "HTML conversion failed, using plain text: %s"
+                                            (error-message-string err))
                        (or raw "")))
                   (or raw "")))))
     (if (string= role "user")
@@ -173,9 +156,10 @@ Converts :html via pandoc (extracting images to CONV-DIR); falls back to :text."
     (insert "</body></html>\n")))
 
 (defun chrome-server-chatgpt--save (payload)
-  "Save ChatGPT conversation PAYLOAD to a per-item directory, refreshing if it already exists.
-Each conversation lives in <root>/<basename>/<basename>.{org,html} plus any
-extracted images.  Returns the path of the org file written."
+  "Save ChatGPT conversation PAYLOAD to a per-item directory.
+Refreshes the directory if a conversation with the same id already
+exists.  Each conversation lives in <root>/<basename>/<basename>.{org,html}
+plus any extracted images.  Returns the path of the org file written."
   (let* ((url   (plist-get payload :url))
          (title (or (plist-get payload :title) "chatgpt-conversation"))
          (turns (plist-get payload :turns))
@@ -204,8 +188,8 @@ extracted images.  Returns the path of the org file written."
     (condition-case err
         (chrome-server-chatgpt--save-html turns html-file)
       (error
-       (message "chrome-server-chatgpt: could not save HTML file %s: %s"
-                html-file (error-message-string err))))
+       (chrome-server--warn "could not save HTML file %s: %s"
+                            html-file (error-message-string err))))
     (condition-case err
         (with-temp-file file
           (insert (format "#+title: %s\n" title))
@@ -220,6 +204,10 @@ extracted images.  Returns the path of the org file written."
        (error "chrome-server-chatgpt: could not write org file %s: %s"
               file (error-message-string err))))
     file))
+
+;; ── Register handler ─────────────────────────────────────────────────────────
+
+(chrome-server-register-handler "CHATGPT" #'chrome-server-chatgpt--handle-chatgpt)
 
 (provide 'chrome-server-chatgpt)
 
