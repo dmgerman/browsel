@@ -220,9 +220,8 @@ org-capture templates: =(chrome-server-get-url)=,
 | =chrome-server-youtube-transcript-dir=               | directory where YouTube transcripts are written (set this)                                                |
 | =chrome-server-youtube-transcript-yt-dlp-executable= | =yt-dlp= binary used to fetch subtitles                                                                  |
 
-The bundled =defvar= defaults work but assume a particular directory
-layout; downstream users will usually want to set the path-shaped
-ones explicitly.
+The bundled =defvar= defaults assume a particular directory layout;
+the path variables should be set explicitly per installation.
 
 * Extending the Emacs side
 
@@ -364,9 +363,9 @@ GPL-3.0-or-later.  See =LICENSE=.
 
 * Further reading
 
-- =ai/spookfox-like.md= — the original plan that drove the WS rewrite.
-  Useful when a design decision looks weird and you want to know why.
+- =ai/spookfox-like.md= — the original plan that produced the
+  WebSocket rewrite.  Useful when the rationale for a design choice
+  is not obvious from the code.
 - =ai/gotchas.md= — non-obvious failure modes collected during the
   build.  Read before debugging anything in the categories listed there.
-- =CLAUDE.md= — per-module rules for Claude Code (or for the next
-  human picking this up after a long absence).
+- =CLAUDE.md= — per-module rules for Claude Code.

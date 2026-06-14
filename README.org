@@ -5,9 +5,9 @@
 communicate with each other, in both directions.  Right-click on a
 page in Chrome and have it sent to Emacs (org-capture, save-page,
 archive a ChatGPT conversation, save a YouTube video for later).
-Going the other way: from Emacs ask the browser things (what tabs
-are open?  what's the page title?  what's the video's current time?)
-and act on them.
+Going the other way: from Emacs query browser state (what tabs are
+open?  what's the page title?  what's the video's current time?) and
+act on it.
 
 =chrome-server= is composed of two parts:
 
@@ -15,8 +15,8 @@ and act on them.
    registers handlers for actions initiated from Chrome, plus an
    elisp API for actions Emacs initiates.
 2. *A Chrome extension*.  An MV3 extension that connects to the
-   Emacs server, registers the right-click menu items, owns the
-   toolbar icon and the popup, and routes requests in both
+   Emacs server, registers the right-click menu items, implements
+   the toolbar icon and the popup, and routes requests in both
    directions.
 
 Both must be running.  The Chrome extension auto-reconnects, so
@@ -35,16 +35,18 @@ the JSON schemas — see =CONTRIBUTING.org=.
   add-youtube-video, save-youtube-transcript.
 - Configurable keyboard shortcuts for the same actions.
 - A toolbar popup with live connection status, per-tab permission
-  controls, one-click buttons for every action, and a jump list of
-  tabs that have granted JS-eval permission.
-- Per-tab consent gating arbitrary JavaScript evaluation, indicated
-  by an in-page overlay and a red toolbar icon while active.
+  controls, one-click buttons for every action, and a list of tabs
+  with granted JS-eval permission (click an entry to switch to that
+  tab).
+- Per-tab consent gating arbitrary JavaScript evaluation: an in-page
+  overlay prompts for permission, and the toolbar icon turns red
+  while consent remains in effect.
 
 ** In Emacs
 
 - Org-Babel =chrome-js= source blocks that run JavaScript in the
   active tab and return the value into the org buffer.
-- An elisp API to query and steer the browser: list tabs, focus,
+- An elisp API to query and control the browser: list tabs, focus,
   open, close, evaluate JS with a return value.
 
 ** Extensibility
@@ -62,7 +64,7 @@ the JSON schemas — see =CONTRIBUTING.org=.
 | Emacs: save page                       | any page                     | archives the main content as an org file           |
 | Emacs: save ChatGPT conversation       | chatgpt.com pages            | saves the whole conversation as org                |
 | Emacs: add video for later             | YouTube pages / links        | appends a TODO entry with metadata to the videos file |
-| Emacs: save transcript                 | YouTube pages / links        | runs =yt-dlp= and writes a clickable-timestamp org |
+| Emacs: save transcript                 | YouTube pages / links        | runs =yt-dlp= and writes an org file with clickable timestamps |
 
 * Keyboard shortcuts
 
@@ -75,8 +77,8 @@ few defaults are pre-suggested:
 - =Ctrl+Shift+G= → save ChatGPT conversation
 
 The remaining commands are declared but unbound — Chrome only honors
-four default-bound shortcuts per Chrome extension, so the rest are
-yours to assign.
+four default-bound shortcuts per Chrome extension, so the rest must
+be assigned manually.
 
 * Per-tab eval consent
 
@@ -102,14 +104,14 @@ a response counts as deny.
 - A button for each menu action that triggers it without using the
   right-click menu.  The label on the right shows the assigned
   keyboard shortcut, if any.
-- A "Tabs with permission" list — every tab where eval rights have
-  been granted, with title, time remaining, and a *Revoke* button.
-  Click a row to jump to that tab.
+- A "Tabs with permission" list — every tab with granted eval
+  rights, showing title, time remaining, and a *Revoke* button.
+  Click a row to switch to that tab.
 
 * Run JavaScript in any tab from Emacs
 
-Send the browser a JavaScript snippet from an org buffer; get the
-value back as the block result:
+Run a JavaScript snippet from an org buffer; the value of the last
+expression becomes the block result:
 
 #+begin_src chrome-js
 document.querySelector('video').currentTime
@@ -123,7 +125,7 @@ click Allow.  Same call from elisp:
                        '(:code "document.querySelector('video').currentTime"))
 #+end_src
 
-* Querying and steering the browser from Emacs
+* Querying and controlling the browser from Emacs
 
 #+begin_src emacs-lisp
 ;; List every open tab as title/url pairs
@@ -146,8 +148,8 @@ Core (always needed):
 - Emacs with the =websocket= package available.
 - Chrome or Chromium.
 
-Per-feature.  Each row is needed *only* if you actually invoke that
-feature; the rest of =chrome-server= keeps working without it.
+Per-feature.  Each row is needed *only* if you invoke that feature;
+the rest of =chrome-server= keeps working without it.
 
 | Feature                            | Needed                            | What "missing" looks like                                  |
 |------------------------------------+-----------------------------------+-------------------------------------------------------------|
@@ -158,12 +160,12 @@ feature; the rest of =chrome-server= keeps working without it.
 | Optional Emacs-side modules        | corresponding =(require …)= in the use-package =:config= | Their handlers aren't registered; that name returns "Unknown request" |
 
 If you don't load a module (e.g. don't =(require 'chrome-server-youtube)=),
-none of its external dependencies are needed at all.
+none of its external dependencies are needed.
 
 ** Emacs
 
-One =use-package= form for the core, with each optional feature pulled
-in by a =require= you can comment out:
+One =use-package= form for the core, with one =require= per optional
+feature; comment out any you do not want loaded:
 
 #+begin_src emacs-lisp
 (use-package websocket :ensure t)
@@ -179,22 +181,25 @@ in by a =require= you can comment out:
   (chrome-server-start))
 #+end_src
 
-Drop any =require= line you don't want — =chrome-server.el= itself
-registers the three baseline handlers (=ORG_CAPTURE=,
-=ORG_ROAM_CAPTURE=, =EWW=) and that's enough for a minimal install.
+=chrome-server.el= itself registers the three baseline handlers
+(=ORG_CAPTURE=, =ORG_ROAM_CAPTURE=, =EWW=), which is sufficient for a
+minimal installation.  The =require= lines load the additional
+backends only when their actions are needed.
 
-The server binds =127.0.0.1:9130=.  =(chrome-server-stop)= / =-start=
-control it manually.  =(setq chrome-server-debug t)= logs every frame
-to =*chrome-server*= when something looks off.
+The server binds =127.0.0.1:9130=.  =(chrome-server-stop)= /
+=(chrome-server-start)= start and stop it explicitly.  =(setq
+chrome-server-debug t)= logs every WebSocket frame to the
+=*chrome-server*= buffer for protocol debugging.
 
-A few variables you'll likely want to set:
+Configuration variables for paths, output locations, and credentials
+(full list in =CONTRIBUTING.org=):
 
 | Variable                                | Purpose                                       |
 |-----------------------------------------+-----------------------------------------------|
 | =chrome-server-www-archive-dir=         | where save-page writes archived pages         |
 | =chrome-server-chatgpt-dir=             | where save-chatgpt writes conversations       |
 | =chrome-server-youtube-videos-file=     | org file the YouTube capture appends to       |
-| =chrome-server-youtube-transcript-dir=  | where transcripts land                        |
+| =chrome-server-youtube-transcript-dir=  | where transcripts are written                 |
 | =chrome-server-youtube-api-key=         | YouTube Data API v3 key (for video metadata)  |
 | =chrome-server-org-capture-key=         | org-capture template key for browser captures |
 
@@ -223,13 +228,14 @@ The popup should turn green within a few seconds.  If not, click
 Most things are reachable from the popup → Options page (or
 =chrome://extensions= → Chrome Server → Extension options):
 
-- *Raise Emacs* — a checkbox per action.  When checked, Emacs comes to
-  the foreground after that action completes.  Lives in browser
-  storage, overrides the bundled defaults without rebuilding.
+- *Raise Emacs* — a checkbox per action.  When checked, Emacs is
+  brought to the foreground after that action completes.  Stored in
+  browser storage and overrides the bundled defaults without
+  requiring a rebuild.
 - *Menus* / *Handlers* — raw JSON editors for additions or changes
   beyond the bundled defaults.
 
-Bigger changes (new menus, new content scripts, etc.) live in
+Larger changes (new menus, new content scripts, etc.) are made in
 =extension/config.json=.  =CONTRIBUTING.org= covers the schema.
 
 * Security
@@ -251,9 +257,10 @@ The toolbar icon turns red on tabs you've granted eval permission, and
 the popup lists every consented tab so revocation does not require
 searching for the tab.
 
-There is no authentication on the WebSocket — anything that can dial
-=127.0.0.1:9130= as your user can drive Emacs through =chrome-server=.
-That's the same trust boundary as any other local daemon.
+There is no authentication on the WebSocket — any process that can
+connect to =127.0.0.1:9130= under your user account can invoke Emacs
+handlers through =chrome-server=.  The trust boundary is the same as
+for any other local-only daemon.
 
 For the deeper threat model and what's /not/ protected, see
 =CONTRIBUTING.org=.
@@ -281,6 +288,6 @@ See =CONTRIBUTING.org=.  It covers the full configuration schema, the
 JSON shapes Emacs and the browser exchange, the build pipeline, and
 how to extend either side.
 
-For weird debugging stories that aren't otherwise documented (MV3
-setIcon quirks, IPv6 localhost, lexical-binding + org-capture, YouTube
-PoToken gating, …) see =ai/gotchas.md=.
+For non-obvious failure modes not otherwise documented (MV3 setIcon
+behavior, IPv6 localhost, lexical-binding with =org-capture-initial=,
+YouTube PoToken gating, etc.) see =ai/gotchas.md=.
