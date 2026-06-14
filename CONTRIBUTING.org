@@ -1,10 +1,10 @@
 #+title: chrome-server — contributing
 #+author: Daniel M. German
 
-Reference for extending the bridge: adding new menu items, adding new
-browser → Emacs handlers, adding new Emacs → browser handlers, or
-modifying the build pipeline.  Read =README.org= first for what the
-bridge does and how it's set up.
+Reference for extending =chrome-server=: adding new menu items,
+adding new browser → Emacs handlers, adding new Emacs → browser
+handlers, or modifying the build pipeline.  Read =README.org= first
+for what =chrome-server= does and how it's set up.
 
 * Repository layout
 

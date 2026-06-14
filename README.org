@@ -1,12 +1,28 @@
 #+title: chrome-server
 #+author: Daniel M. German
 
-A two-way bridge between Emacs and Chrome.  Right-click on a page in
-Chrome and have it land in Emacs (org-capture, save-page, archive a
-ChatGPT conversation, catch a YouTube video for later).  Going the
-other way: from Emacs ask the browser things (what tabs are open?
-what's the page title?  what's the video's current time?) and act on
-them.
+=chrome-server= integrates Emacs with the Chrome browser, in both
+directions.  Right-click on a page in Chrome and have it land in
+Emacs (org-capture, save-page, archive a ChatGPT conversation, catch
+a YouTube video for later).  Going the other way: from Emacs ask the
+browser things (what tabs are open?  what's the page title?  what's
+the video's current time?) and act on them.
+
+=chrome-server= is composed of two parts:
+
+1. *An Emacs side* (the elisp modules in this repository).  Emacs
+   runs a WebSocket server on =127.0.0.1:9130= that exposes named
+   handlers for browser-initiated actions and lets you call into the
+   browser from elisp.
+2. *A Chrome extension* (the =extension/= subdirectory).  An MV3
+   extension that dials the Emacs server, paints the right-click
+   menus, the toolbar icon, and the popup, and brokers requests in
+   both directions.
+
+Both must be running for anything to work.  The Chrome extension
+auto-reconnects, so starting / restarting Emacs is non-disruptive —
+the popup just blinks from Connected to Connecting and back.  Setup
+for each side is below.
 
 For everything beneath the surface — adding new actions, the wire
 protocol, the JSON schemas — see =CONTRIBUTING.org=.
@@ -125,7 +141,7 @@ Core (always needed):
 - Chrome or Chromium.
 
 Per-feature.  Each row is needed *only* if you actually invoke that
-feature; the rest of the bridge keeps working without it.
+feature; the rest of =chrome-server= keeps working without it.
 
 | Feature                            | Needed                            | What "missing" looks like                                  |
 |------------------------------------+-----------------------------------+-------------------------------------------------------------|
@@ -157,9 +173,9 @@ in by a =require= you can comment out:
   (chrome-server-start))
 #+end_src
 
-Drop any =require= line you don't want — the bridge starts with just
-the three baseline handlers (=ORG_CAPTURE=, =ORG_ROAM_CAPTURE=, =EWW=)
-that =chrome-server.el= itself registers.
+Drop any =require= line you don't want — =chrome-server.el= itself
+registers the three baseline handlers (=ORG_CAPTURE=,
+=ORG_ROAM_CAPTURE=, =EWW=) and that's enough for a minimal install.
 
 The server binds =127.0.0.1:9130=.  =(chrome-server-stop)= / =-start=
 control it manually.  =(setq chrome-server-debug t)= logs every frame
@@ -229,7 +245,7 @@ The toolbar icon turns red on tabs you've granted eval permission, and
 the popup lists every consented tab so you can revoke without hunting.
 
 There is no authentication on the WebSocket — anything that can dial
-=127.0.0.1:9130= as your user can drive Emacs through the bridge.
+=127.0.0.1:9130= as your user can drive Emacs through =chrome-server=.
 That's the same trust boundary as any other local daemon.
 
 For the deeper threat model and what's /not/ protected, see
