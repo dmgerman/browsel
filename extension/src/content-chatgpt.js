@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Daniel M. German <dmg@turingmachine.org>
+//
 // Extracts the current ChatGPT conversation from the DOM.
 //
 // ChatGPT virtualizes in two dimensions:

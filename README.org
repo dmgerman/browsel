@@ -44,11 +44,17 @@ with it.
 
 ** The popup (click the toolbar icon)
 
+#+caption: The extension popup
+#+attr_org: :width 280
+#+attr_html: :width 280
+[[file:doc/popup.png]]
+
 - Connection status to Emacs (●  Connected / Connecting… / Disconnected).
 - A one-line summary of this tab's eval permission, with buttons to
   grant for 1 hour, grant until tab closes, or revoke.
 - A button for each menu action so you can fire them without
-  right-clicking.
+  right-clicking.  The right-aligned tag shows the assigned keyboard
+  shortcut, if any.
 - A "Tabs with permission" list — every tab where you've granted eval
   rights, with title, time remaining, and a *Revoke* button.  Click a
   row to jump to that tab.
@@ -216,6 +222,12 @@ For the deeper threat model and what's /not/ protected, see
 | "no client connected" from elisp          | Extension isn't connected.  Check the popup; reload if needed.                |
 | =chrome-server-start= says "address in use" | Another process is already on 9130.  =lsof -nP -iTCP:9130 -sTCP:LISTEN= to see which. |
 | Save-page produces no notification        | Check =*Messages*=; the handler logs success/failure there.                    |
+
+* License
+
+GPL-3.0-or-later.  The full license text is in =LICENSE=
+(the canonical FSF GPL v3 text).  Every source file carries an SPDX
+identifier; see =CONTRIBUTING.org= if you're adding new files.
 
 * Need to add a new action or hack the wire?
 

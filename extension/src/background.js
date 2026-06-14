@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Daniel M. German <dmg@turingmachine.org>
+//
 // background.js — MV3 service worker, acts as router.
 //
 // Three roles:

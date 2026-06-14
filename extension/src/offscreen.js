@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Daniel M. German <dmg@turingmachine.org>
+//
 // offscreen.js — holds the WebSocket to the Emacs server.
 //
 // MV3 service workers idle out after ~30s and would kill a WebSocket held

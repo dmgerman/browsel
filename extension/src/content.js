@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Daniel M. German <dmg@turingmachine.org>
+//
 // content.js — relay window.postMessage to the background service worker.
 //
 // Pages can trigger Emacs requests by posting a message like:

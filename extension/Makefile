@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Daniel M. German <dmg@turingmachine.org>
+
 EXTENSION_NAME ?= chrome-server-extension
 VERSION        := $(shell python3 -c 'import json; print(json.load(open("config.json"))["extension"]["version"])')
 

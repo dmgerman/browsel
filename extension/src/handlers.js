@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Daniel M. German <dmg@turingmachine.org>
+//
 // handlers.js — dispatch Emacs-initiated requests via the handlers[] config.
 //
 // A handler entry looks like:

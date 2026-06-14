@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Daniel M. German <dmg@turingmachine.org>
 """Generate red-hued variants of the extension icons.
 
 Reads icons/icon{16,48,128}.png and writes

@@ -295,37 +295,16 @@ time).
 
 ** Build pipeline
 
-#+begin_src
-config.json + Makefile + build-manifest.py
-                          │
-                          ▼
-                  manifest.json
-                          │
-                          ▼
-         build/  (config.json copy
-                  + manifest.json
-                  + src/ html/ icons/)
-                          │
-                          ▼
-         Chrome "Load unpacked"
-#+end_src
+=scripts/build-manifest.py= reads =config.json= and emits
+=build/manifest.json= — the static infrastructure from
+=config.extension=, =content_scripts= from =config.contentScripts=,
+=commands= collected from =menus[].command=.
 
-=make build= runs lint, copies =SRC_FILES= into =build/=, and
-generates =build/manifest.json= via =scripts/build-manifest.py=.  The
-manifest builder pulls everything from =config.json= — the static
-infrastructure under =config.extension=, =content_scripts= from
-=config.contentScripts=, =commands= collected from
-=menus[].command=.
+=make lint= verifies every JS file's =import= statements reference
+files in =SRC_FILES=.  Forgetting to add a new file to that list
+manifests as "Service worker registration failed.  Status code: 3".
 
-=make lint= validates JSON and verifies every JS file's =import=
-statements reference files in =SRC_FILES=.  This catches the most
-common failure (forgetting to add a new file to the list — symptom is
-"Service worker registration failed.  Status code: 3").
-
-=make package= builds and zips =build/= into =../dist/=.
-
-=make load= builds, copies the build path to the clipboard (macOS),
-and opens =chrome://extensions=.
+=make help= lists the targets.
 
 * Build / verify cycle
 
@@ -350,10 +329,6 @@ lsof -nP -iTCP:9130 -sTCP:LISTEN
 emacsclient -e '(format "clients=%d" (length chrome-server--clients))'
 #+end_src
 
-After a manifest-affecting change, the extension card in
-=chrome://extensions= must be reloaded — =make build= alone doesn't
-restart Chrome.
-
 * Debugging surfaces
 
 | Side      | Where                                                                  |
@@ -367,62 +342,25 @@ For non-obvious failure modes (MV3 setIcon paths failing, IPv6
 localhost, =defvar= not overwriting, =lexical-binding= breaking
 =org-capture-initial=, YouTube PoToken gating, …) see =ai/gotchas.md=.
 
-* Threat model & security implementation
+* Security implementation
 
-** Where the threats live
+Threat model and what's /not/ protected are in =README.org=.  Two
+implementation notes belong here:
 
-- *Local processes* — any process on the same machine can dial
-  =127.0.0.1:9130= and speak the WS protocol.  No authentication.
-- *Inside the browser* — =EVAL_IN_ACTIVE_TAB= runs JS with full
-  access to the page's DOM, cookies, =localStorage=, session state.
+*Per-tab consent.*  =extension/src/consent.js= stores grants in
+=chrome.storage.session= as
+=consentByTab[<tabId>] = { expiry: <ms> | null }=.  =null= = until
+tab close; ms = wall-clock expiry.  =ensureConsent= is the single
+gate, called from the =user-script= shape adapter.
+=chrome.tabs.onRemoved= drops entries (tab ids get reused).
 
-** Per-tab consent (implementation)
+*Toolbar icon swap.*  =chrome.action.setIcon({path: ...})= silently
+fails inside MV3 service workers.  =background.js= and =handlers.js=
+build =ImageData= from the PNGs via =OffscreenCanvas= instead.
 
-Lives in =extension/src/consent.js=.  Storage shape in
-=chrome.storage.session=:
+* License
 
-#+begin_src js
-{ "consentByTab": { "<tabId>": { "expiry": <ms> | null } } }
-#+end_src
-
-=expiry: null= means "no time limit, dies when the tab closes".
-Numeric expiry means "expires at that wall-clock time."  The
-=ensureConsent= entry point is the single gate; the =user-script=
-shape adapter in =handlers.js= calls it before any
-=chrome.userScripts.execute=.
-
-Cleanup hooks:
-
-- =chrome.tabs.onRemoved= → =forgetTabConsent= drops the entry.
-- Tab ids are reused; do not assume an old id is still valid.
-
-The popup queries via =CONSENT_GET=, grants via =CONSENT_GRANT=,
-revokes via =CONSENT_REVOKE=, and lists all granted tabs via
-=CONSENTED_TABS=.
-
-** Toolbar icon swap
-
-=chrome.action.setIcon({path: ...})= is broken inside MV3 service
-workers (silently fails with "Failed to fetch").  =background.js= and
-=handlers.js= build =ImageData= from the PNGs via =OffscreenCanvas=
-and pass that instead.  See =ai/gotchas.md=.
-
-** What is /not/ protected
-
-- =GET_ALL_TABS=, =FOCUS_TAB=, =OPEN_TAB=, =CLOSE_TAB= don't prompt —
-  they expose URLs and steer the browser but can't read page contents.
-- The Chrome → Emacs direction is gated only by the user initiating
-  the action.
-- Host permissions include =https://*/*= and =http://*/*= so eval
-  works on arbitrary sites.  Narrow them at the cost of breaking
-  save-page on excluded hosts.
-
-** Hardening ideas not yet implemented
-
-- Pause toggle in the popup (refuse to dial the WS).
-- Origin allowlist for eval.
-- Per-session token auth on the WS.
-- Narrower =host_permissions=.
+GPL-3.0-or-later.  See =LICENSE=.
 
 * Further reading
 

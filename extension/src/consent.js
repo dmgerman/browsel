@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Daniel M. German <dmg@turingmachine.org>
+//
 // consent.js — per-tab consent gate for code-eval requests.
 //
 // Threat model: anything that can connect to ws://127.0.0.1:9130 can
