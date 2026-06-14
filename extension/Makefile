@@ -39,15 +39,14 @@ SRC_FILES := config.json \
              icons/icon-red-48.png \
              icons/icon-red-128.png
 
-.PHONY: all build package lint clean load help
+.PHONY: all build package lint clean help
 
 all: build
 
 help:
 	@echo "Targets:"
+	@echo "  make           — same as 'make build'"
 	@echo "  make build     — materialise $(BUILD_DIR)/ (load this in Chrome)"
-	@echo "  make load      — build, copy $(BUILD_DIR) path to clipboard,"
-	@echo "                   open chrome://extensions"
 	@echo "  make package   — produce $(ZIP) from $(BUILD_DIR)"
 	@echo "  make lint      — validate config.json + check source files exist"
 	@echo "  make clean     — remove $(BUILD_DIR)/ and $(DIST_DIR)/"
@@ -104,28 +103,3 @@ package: build $(DIST_DIR)
 
 clean:
 	rm -rf $(BUILD_DIR) $(DIST_DIR)
-
-# ── Convenience: load into Chrome ────────────────────────────────────────────
-#
-# `make load` does three things to make loading the unpacked extension
-# fast on macOS:
-#   1. build $(BUILD_DIR)/ from current sources
-#   2. put the BUILD path on the clipboard so Cmd-V works in the Chrome
-#      file picker
-#   3. open Chrome on chrome://extensions
-# On first run the user still has to: enable Developer mode (top right),
-# click "Load unpacked", and paste (Cmd-V) into the file picker.  After
-# that, just clicking the extension's reload button picks up edits
-# (re-run `make build` first).
-
-load: build
-	@echo "load directory: $(BUILD_ABS)"
-	@printf "%s" "$(BUILD_ABS)" | pbcopy 2>/dev/null && echo "→ path copied to clipboard" \
-	  || echo "(could not copy to clipboard; pbcopy unavailable)"
-	@open -a "Google Chrome" "chrome://extensions" \
-	  || echo "(could not open Chrome; open chrome://extensions manually)"
-	@echo
-	@echo "Next steps:"
-	@echo "  1. Toggle 'Developer mode' (top right) if not already on."
-	@echo "  2. Click 'Load unpacked'."
-	@echo "  3. Paste the path (Cmd-V) into the file dialog."

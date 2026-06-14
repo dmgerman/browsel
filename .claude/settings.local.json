@@ -21,7 +21,10 @@
       "Bash(python3 scripts/make-red-icons.py)",
       "Bash(pngpaste doc/popup.png)",
       "Bash(emacs --batch -Q --eval '\\(checkdoc-file \"__TRACKED_VAR__\"\\)')",
-      "Bash(python3 *)"
+      "Bash(python3 *)",
+      "Bash(git ls-tree *)",
+      "Bash(make help *)",
+      "Bash(make)"
     ]
   }
 }

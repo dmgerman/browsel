@@ -1,4 +1,4 @@
-# `make build` materialises a clean, loadable copy of the extension
-# under build/.  It's a derived artefact — Chrome's "Load unpacked"
-# should point at it, but git shouldn't track it.
-build/
+# build/ is materialised by `make build` and is committed in this
+# repository so users do not have to rebuild before using the
+# extension.  Source files live alongside the Makefile; edit those,
+# then re-run `make build` to refresh build/.
