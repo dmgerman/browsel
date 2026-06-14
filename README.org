@@ -223,10 +223,13 @@ The block accepts three optional header arguments:
 
 *Read the current video playback time:*
 
+(Please remove the  space between # and +. I have included them so they
+be properly rendered inside the browser)
+
 #+begin_example
-#+begin_src chrome-js
+# +begin_src chrome-js
 document.querySelector('video').currentTime
-#+end_src
+# +end_src
 #+end_example
 
 
