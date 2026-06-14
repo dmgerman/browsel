@@ -1,12 +1,13 @@
 #+title: chrome-server
 #+author: Daniel M. German
 
-=chrome-server= integrates Emacs with the Chrome browser, in both
-directions.  Right-click on a page in Chrome and have it land in
-Emacs (org-capture, save-page, archive a ChatGPT conversation, catch
-a YouTube video for later).  Going the other way: from Emacs ask the
-browser things (what tabs are open?  what's the page title?  what's
-the video's current time?) and act on them.
+=chrome-server= is a module that allows Emacs and Chrome to
+communicate with each other, in both directions.  Right-click on a
+page in Chrome and have it land in Emacs (org-capture, save-page,
+archive a ChatGPT conversation, catch a YouTube video for later).
+Going the other way: from Emacs ask the browser things (what tabs
+are open?  what's the page title?  what's the video's current time?)
+and act on them.
 
 =chrome-server= is composed of two parts:
 
