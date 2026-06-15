@@ -170,11 +170,29 @@ async function loadConfig() {
   };
 }
 
+// Serialise refreshes.  Several entry points call `refreshConfig`
+// during start-up (the boot IIFE, `chrome.runtime.onInstalled`,
+// `chrome.runtime.onStartup`, and `chrome.storage.onChanged`).  When
+// two of them run concurrently both pass through
+// `chrome.contextMenus.removeAll` before either issues its
+// `contextMenus.create` calls, and the second `create` batch ends up
+// trying to register ids that the first batch has already created.
+// By caching the in-flight promise we make every concurrent caller
+// await the same rebuild.
+let refreshInFlight = null;
 async function refreshConfig() {
-  cachedConfig = await loadConfig();
-  log("config loaded:", cachedConfig);
-  await rebuildContextMenus(cachedConfig);
-  return cachedConfig;
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    try {
+      cachedConfig = await loadConfig();
+      log("config loaded:", cachedConfig);
+      await rebuildContextMenus(cachedConfig);
+      return cachedConfig;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+  return refreshInFlight;
 }
 
 // ── Context menus ────────────────────────────────────────────────────────────
