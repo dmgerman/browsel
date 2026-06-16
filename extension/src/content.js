@@ -14,7 +14,7 @@
 // page-side integrations keep working.  Pages should only be considered
 // allowed if they speak this protocol intentionally.
 
-const api = (typeof browser !== "undefined") ? browser : chrome;
+var api = (typeof browser !== "undefined") ? browser : chrome;
 
 window.addEventListener("message", (event) => {
   if (event.source !== window) return;

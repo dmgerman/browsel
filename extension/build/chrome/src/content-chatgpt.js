@@ -19,7 +19,7 @@
 //
 // See ai/chatgpt.md for the full background on why this is the shape it is.
 
-const api = (typeof browser !== "undefined") ? browser : chrome;
+var api = (typeof browser !== "undefined") ? browser : chrome;
 
 // Flip to true to get `[chatgpt-extract]` traces in the page console.
 const DEBUG = false;

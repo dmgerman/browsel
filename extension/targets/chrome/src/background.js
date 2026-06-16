@@ -29,9 +29,9 @@ import {
 
 const OFFSCREEN_URL = "html/offscreen.html";
 
-// Mirror of the offscreen page's status.  Read by core's
-// `transport.getStatus`; written by the WS_STATUS message handler
-// below.
+// Last status pushed up from the offscreen page.  Used as a fallback
+// when the pull-through `transport.getStatus` cannot reach offscreen;
+// updated by the WS_STATUS message handler below.
 let cachedStatus = "DISCONNECTED";
 
 function log(...args) { console.log("[bg]", ...args); }
@@ -83,7 +83,20 @@ const transport = {
   async reconnect() {
     return await offscreenSend({ type: "WS_RECONNECT" });
   },
-  getStatus() {
+  // Pull-through to offscreen so a respawned SW (cachedStatus reset
+  // to "DISCONNECTED") cannot report a stale value to the popup.
+  // cachedStatus stays as a fallback for the case where the offscreen
+  // round-trip fails.
+  async getStatus() {
+    try {
+      const r = await offscreenSend({ type: "WS_STATUS_QUERY" });
+      if (r?.status) {
+        cachedStatus = r.status;
+        return r.status;
+      }
+    } catch (e) {
+      log("status query to offscreen failed:", e?.message ?? e);
+    }
     return cachedStatus;
   },
 };

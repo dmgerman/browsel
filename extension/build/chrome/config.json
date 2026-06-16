@@ -172,7 +172,7 @@
     },
     {
       "id":      "youtube-transcript",
-      "title":   "Emacs: save transcript",
+      "title":   "Emacs: save YouTube transcript",
       "trigger": ["page", "link"],
       "request": "YOUTUBE_TRANSCRIPT",
       "payload": "url",

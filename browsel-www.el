@@ -53,7 +53,8 @@ buffer open."
   (browsel--require-payload payload)
   (let ((file (browsel-www--save payload)))
     (browsel--maybe-raise payload)
-    (browsel--ok (format "Saved to %s" file))))
+    (kill-new file)
+    (browsel--ok (format "Saved to %s (path copied to clipboard)" file))))
 
 ;; ── Page saving ───────────────────────────────────────────────────────────────
 

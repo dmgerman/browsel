@@ -268,7 +268,10 @@ Fetches metadata from oEmbed and the YouTube Data API, then runs
              :empty-lines-before 1
              :immediate-finish t
              :after-finalize browsel-youtube--refresh-inline-images))))
-    (org-capture nil "v")))
+    (org-capture nil "v")
+    (let ((path (expand-file-name browsel-youtube-videos-file)))
+      (kill-new path)
+      (message "Video appended to %s (path copied to clipboard)" path))))
 
 ;; ── YOUTUBE_TRANSCRIPT handler ────────────────────────────────────────────────
 
@@ -532,7 +535,8 @@ If no transcript is available, writes a stub org file and logs to *Messages*."
                 (insert (browsel-youtube--transcript-vtt-to-org vtt-content url))
                 (insert "\n")))
             (browsel--maybe-raise payload)
-            (message "Transcript saved to %s" org-file))))
+            (kill-new org-file)
+            (message "Transcript saved to %s (path copied to clipboard)" org-file))))
     (error
      (browsel--warn "transcript failed: %s" (error-message-string err)))))
 

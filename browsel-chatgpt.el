@@ -101,7 +101,8 @@ Honours :raise after the conversation has been written to disk."
   (browsel--require-payload payload)
   (let ((file (browsel-chatgpt--save payload)))
     (browsel--maybe-raise payload)
-    (browsel--ok (format "Saved to %s" file))))
+    (kill-new file)
+    (browsel--ok (format "Saved to %s (path copied to clipboard)" file))))
 
 ;; ── Conversation saving ───────────────────────────────────────────────────────
 
