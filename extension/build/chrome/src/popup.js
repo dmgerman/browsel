@@ -229,8 +229,17 @@ async function loadMenus() {
   }
 }
 
+// A menu whose only trigger is "link" or "image" cannot fire from the
+// popup — there is no clicked anchor or image to pull info.linkUrl /
+// info.srcUrl from.  Showing such buttons would just produce confusing
+// failures.  Keep them in the context menu only.
+function popupCapable(m) {
+  const triggers = Array.isArray(m.trigger) ? m.trigger : [m.trigger ?? "page"];
+  return triggers.some((t) => t !== "link" && t !== "image");
+}
+
 async function renderActions() {
-  const menus = await loadMenus();
+  const menus = (await loadMenus()).filter(popupCapable);
   customEl.innerHTML = "";
   if (!menus.length) return;
   for (const m of menus) {
