@@ -19,7 +19,10 @@
 //                                            (throws on error)
 //   transport.reconnect()                 → Promise<{ ok }>
 //   transport.getStatus()                 → "CONNECTED"/"CONNECTING"/
-//                                            "DISCONNECTED"
+//                                            "DISCONNECTED", or a
+//                                            Promise resolving to one
+//                                            (Chrome pulls through to
+//                                            the offscreen document)
 //
 // The per-target background also calls `setWsStatus(status)` when the
 // WebSocket state changes, so the popup and the SW (Chrome) or the
@@ -269,8 +272,16 @@ function installMessageRouter(transport) {
 
     switch (msg.type) {
       case "WS_STATUS_QUERY": {
-        sendResponse({ status: transport.getStatus() });
-        return false;
+        // transport.getStatus() may return a Promise (Chrome's
+        // pull-through to the offscreen document); Promise.resolve
+        // also accepts the sync string Firefox returns.  On rejection
+        // fall back to the last broadcast value so the popup is not
+        // forced to "Disconnected" by a transient round-trip failure.
+        Promise.resolve(transport.getStatus()).then(
+          (status) => sendResponse({ status }),
+          ()       => sendResponse({ status: wsStatus }),
+        );
+        return true;
       }
 
       case "WS_RECONNECT": {
