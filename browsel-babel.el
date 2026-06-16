@@ -1,12 +1,12 @@
-;;; chrome-server-babel.el --- Org Babel integration for chrome-server  -*- lexical-binding: t; -*-
+;;; browsel-babel.el --- Org Babel integration for browsel  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Daniel M. German <dmg@turingmachine.org>
 
 ;; Author: Daniel M. German <dmg@turingmachine.org>
 ;; Maintainer: Daniel M. German <dmg@turingmachine.org>
 ;; Keywords: comm, tools, browser, org, languages
-;; URL: https://github.com/dmgerman/chrome-server
-;; Package-Requires: ((emacs "27.1") (chrome-server "0.72") (org "9.4"))
+;; URL: https://github.com/dmgerman/browsel
+;; Package-Requires: ((emacs "27.1") (browsel "0.8") (org "9.4"))
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;;
@@ -25,11 +25,11 @@
 
 ;;; Commentary:
 
-;; Adds an `org-babel-execute:chrome-js' function so the user can
+;; Adds an `org-babel-execute:browsel-js' function so the user can
 ;; evaluate JavaScript in the browser's active tab from inside an org
 ;; source block and capture the return value.
 ;;
-;;   #+begin_src chrome-js
+;;   #+begin_src browsel-js
 ;;   document.querySelector('video').currentTime
 ;;   #+end_src
 ;;
@@ -60,7 +60,7 @@
 
 ;;; Code:
 
-(require 'chrome-server)
+(require 'browsel)
 (require 'org)
 
 ;; Forward-declare so we don't pull in the whole babel runtime at load time.
@@ -68,14 +68,14 @@
 
 (defvar org-src-lang-modes)
 
-;; Make C-c ' open chrome-js blocks in javascript-mode for syntax help.
+;; Make C-c ' open browsel-js blocks in javascript-mode for syntax help.
 ;; Called at load time; if `org-src' has not been loaded yet,
 ;; `org-src-lang-modes' is forward-declared above and `add-to-list'
 ;; will define it on first use.
 (eval-when-compile (require 'org-src nil t))
-(add-to-list 'org-src-lang-modes '("chrome-js" . js))
+(add-to-list 'org-src-lang-modes '("browsel-js" . js))
 
-(defun chrome-server-babel--first-result (response)
+(defun browsel-babel--first-result (response)
   "Return the JS return value from the first frame in RESPONSE.
 RESPONSE is the EVAL_IN_ACTIVE_TAB response payload."
   (let ((frames (plist-get response :result)))
@@ -89,7 +89,7 @@ RESPONSE is the EVAL_IN_ACTIVE_TAB response payload."
      :result)))
 
 ;;;###autoload
-(defun org-babel-execute:chrome-js (body params)
+(defun org-babel-execute:browsel-js (body params)
   "Execute BODY as JavaScript in the active browser tab.
 PARAMS is the alist of header arguments from the source block."
   (let* ((world    (or (cdr (assq :world  params)) "USER_SCRIPT"))
@@ -99,17 +99,17 @@ PARAMS is the alist of header arguments from the source block."
          (req-payload (append
                        (list :code body :world world)
                        (when tab-id (list :tabId tab-id))))
-         (response (chrome-server-request "EVAL_IN_ACTIVE_TAB"
+         (response (browsel-request "EVAL_IN_ACTIVE_TAB"
                                           req-payload client))
          (status   (plist-get response :status)))
     (unless (equal status "ok")
-      (error "chrome-js: %s"
+      (error "browsel-js: %s"
              (or (plist-get response :message)
                  "browser returned non-ok status")))
     (if (equal frames "all")
         (plist-get response :result)
-      (chrome-server-babel--first-result response))))
+      (browsel-babel--first-result response))))
 
-(provide 'chrome-server-babel)
+(provide 'browsel-babel)
 
-;;; chrome-server-babel.el ends here
+;;; browsel-babel.el ends here

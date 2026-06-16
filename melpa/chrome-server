@@ -1,3 +1,0 @@
-(chrome-server
- :fetcher github
- :repo "dmgerman/chrome-server")

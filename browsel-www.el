@@ -1,12 +1,12 @@
-;;; chrome-server-www.el --- Web page archiving backend for chrome-server  -*- lexical-binding: t; -*-
+;;; browsel-www.el --- Web page archiving backend for browsel  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Daniel M. German <dmg@turingmachine.org>
 
 ;; Author: Daniel M. German <dmg@turingmachine.org>
 ;; Maintainer: Daniel M. German <dmg@turingmachine.org>
 ;; Keywords: comm, tools, browser, org
-;; URL: https://github.com/dmgerman/chrome-server
-;; Package-Requires: ((emacs "27.1") (chrome-server "0.72"))
+;; URL: https://github.com/dmgerman/browsel
+;; Package-Requires: ((emacs "27.1") (browsel "0.8"))
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;;
@@ -25,7 +25,7 @@
 
 ;;; Commentary:
 
-;; Web page archiving backend for chrome-server.  Registers the SAVE_PAGE
+;; Web page archiving backend for browsel.  Registers the SAVE_PAGE
 ;; WebSocket request handler which saves the main content of any web page
 ;; to ~/sync/www-archive/<basename>/ as both an HTML file and an org file
 ;; (converted via pandoc).  Embedded images are extracted to the same
@@ -36,40 +36,40 @@
 
 ;;; Code:
 
-(require 'chrome-server)
+(require 'browsel)
 
 ;; ── Configuration ────────────────────────────────────────────────────────────
 
-(defvar chrome-server-www-archive-dir "~/sync/www-archive"
+(defvar browsel-www-archive-dir "~/sync/www-archive"
   "Directory where saved web pages are stored.")
 
 ;; ── Handler ──────────────────────────────────────────────────────────────────
 
-(defun chrome-server-www--handle-save-page (payload)
+(defun browsel-www--handle-save-page (payload)
   "Handle SAVE_PAGE request with PAYLOAD.
 Honours :raise after the page has been written to disk — same field as
 the interactive handlers, but applied at task completion rather than at
 buffer open."
-  (chrome-server--require-payload payload)
-  (let ((file (chrome-server-www--save payload)))
-    (chrome-server--maybe-raise payload)
-    (chrome-server--ok (format "Saved to %s" file))))
+  (browsel--require-payload payload)
+  (let ((file (browsel-www--save payload)))
+    (browsel--maybe-raise payload)
+    (browsel--ok (format "Saved to %s" file))))
 
 ;; ── Page saving ───────────────────────────────────────────────────────────────
 
-(defun chrome-server-www--save (payload)
+(defun browsel-www--save (payload)
   "Save web page PAYLOAD to a per-item directory under the archive root.
-The root is `chrome-server-www-archive-dir'.  Each save creates a new
+The root is `browsel-www-archive-dir'.  Each save creates a new
 directory named <timestamp>-<title>/ containing <basename>.org,
 <basename>.html, and any extracted images.
 Returns the path of the org file written."
   (let* ((url      (plist-get payload :url))
          (title    (or (plist-get payload :title) "web-page"))
          (html     (plist-get payload :html))
-         (root     (expand-file-name chrome-server-www-archive-dir))
+         (root     (expand-file-name browsel-www-archive-dir))
          (basename (format "%s-%s"
                            (format-time-string "%Y%m%d-%H%M%S")
-                           (chrome-server-www--sanitize-title title)))
+                           (browsel-www--sanitize-title title)))
          (page-dir  (expand-file-name basename root))
          (file      (expand-file-name (concat basename ".org")  page-dir))
          (html-file (expand-file-name (concat basename ".html") page-dir)))
@@ -84,7 +84,7 @@ Returns the path of the org file written."
         (with-temp-file html-file
           (insert html))
       (error
-       (chrome-server--warn "could not save HTML file %s: %s"
+       (browsel--warn "could not save HTML file %s: %s"
                             html-file (error-message-string err))))
     (condition-case err
         (with-temp-file file
@@ -93,9 +93,9 @@ Returns the path of the org file written."
           (insert (format "#+created: %s\n\n" (format-time-string "%Y-%m-%d %H:%M:%S")))
           (insert (format "[[%s][%s]]\n\n" url title))
           (insert (condition-case err
-                      (chrome-server-www--html-to-org html page-dir)
+                      (browsel-www--html-to-org html page-dir)
                     (error
-                     (chrome-server--warn "HTML conversion failed, inserting plain text: %s"
+                     (browsel--warn "HTML conversion failed, inserting plain text: %s"
                                           (error-message-string err))
                      html))))
       (error
@@ -103,16 +103,16 @@ Returns the path of the org file written."
               file (error-message-string err))))
     file))
 
-(defun chrome-server-www--html-to-org (html media-dir)
+(defun browsel-www--html-to-org (html media-dir)
   "Convert HTML string to org format via pandoc.
 Images are extracted to MEDIA-DIR via pandoc's --extract-media flag.
 Signals an error if pandoc is not found or exits non-zero."
-  (unless (executable-find chrome-server-pandoc-executable)
-    (error "Pandoc not found (set chrome-server-pandoc-executable)"))
+  (unless (executable-find browsel-pandoc-executable)
+    (error "Pandoc not found (set browsel-pandoc-executable)"))
   (with-temp-buffer
     (let ((exit-code (call-process-region
-                      (chrome-server--strip-svg html) nil
-                      chrome-server-pandoc-executable
+                      (browsel--strip-svg html) nil
+                      browsel-pandoc-executable
                       nil t nil
                       "-f" "html" "-t" "org"
                       "--wrap=none"
@@ -129,7 +129,7 @@ Signals an error if pandoc is not found or exits non-zero."
         (replace-match ""))
       (buffer-string))))
 
-(defun chrome-server-www--sanitize-title (title)
+(defun browsel-www--sanitize-title (title)
   "Sanitize TITLE for use as a filename component (max 40 chars)."
   (let* ((s (downcase title))
          (s (replace-regexp-in-string "[^a-z0-9]+" "-" s))
@@ -138,8 +138,8 @@ Signals an error if pandoc is not found or exits non-zero."
 
 ;; ── Register handler ─────────────────────────────────────────────────────────
 
-(chrome-server-register-handler "SAVE_PAGE" #'chrome-server-www--handle-save-page)
+(browsel-register-handler "SAVE_PAGE" #'browsel-www--handle-save-page)
 
-(provide 'chrome-server-www)
+(provide 'browsel-www)
 
-;;; chrome-server-www.el ends here
+;;; browsel-www.el ends here

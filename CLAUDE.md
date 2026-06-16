@@ -1,9 +1,11 @@
-# chrome-server
+# browsel
 
-Bidirectional WebSocket bridge between Emacs and a Chrome MV3 extension
-on `127.0.0.1:9130`.  Replaces the previous HTTP-on-9129 design.  Full
-architecture, request catalog, and configuration schema live in
-`README.org` — start there for anything substantive.
+Bidirectional WebSocket bridge between Emacs and a WebExtension on
+`127.0.0.1:9130`.  Two builds ship from the same sources: a Chrome
+Manifest V3 build and a Firefox Manifest V2 build.  Replaces the
+previous HTTP-on-9129 design.  Full architecture, request catalog,
+and configuration schema live in `README.org` — start there for
+anything substantive.
 
 ## Rules
 
@@ -19,15 +21,15 @@ architecture, request catalog, and configuration schema live in
 
 | Path                              | Owns                                                        |
 |-----------------------------------|-------------------------------------------------------------|
-| `chrome-server.el`                | Server lifecycle, JSON frame dispatch, async/sync request primitives, shared helpers, `ORG_CAPTURE` / `ORG_ROAM_CAPTURE` / `EWW` handlers |
-| `chrome-server-www.el`            | `SAVE_PAGE`                                                 |
-| `chrome-server-chatgpt.el`        | `CHATGPT`                                                   |
-| `chrome-server-youtube.el`        | `YOUTUBE`, `YOUTUBE_TRANSCRIPT`                              |
-| `chrome-server-babel.el`          | `org-babel-execute:chrome-js`                               |
+| `browsel.el`                | Server lifecycle, JSON frame dispatch, async/sync request primitives, shared helpers, `ORG_CAPTURE` / `ORG_ROAM_CAPTURE` / `EWW` handlers |
+| `browsel-www.el`            | `SAVE_PAGE`                                                 |
+| `browsel-chatgpt.el`        | `CHATGPT`                                                   |
+| `browsel-youtube.el`        | `YOUTUBE`, `YOUTUBE_TRANSCRIPT`                              |
+| `browsel-babel.el`          | `org-babel-execute:browsel-js`                               |
 | `extension/config.json`           | Single source of truth: shared `extension` block + per-target overlays in `extensionTargets.<name>`, plus menus, handlers, contentScripts |
 | `extension/src/`                  | Shared extension JS (handlers, popup, options, content scripts, consent) |
 | `extension/html/` / `icons/`      | Shared extension HTML + icons                                |
-| `extension/targets/<name>/`       | Per-target overlay tree (e.g. `chrome/` has background.js, offscreen.js, eval-impl.js; `firefox/` is a placeholder) |
+| `extension/targets/<name>/`       | Per-target overlay tree.  `chrome/` (Manifest V3) has background.js, offscreen.js, eval-impl.js, executor.js.  `firefox/` (Manifest V2) has its own background.js, eval-impl.js, executor.js. |
 | `extension/scripts/`              | `build-manifest.py` (takes `--target`), `make-red-icons.py`  |
 | `extension/Makefile`              | `make` (= `make all`) / `make chrome` / `make firefox` / `make package` / `make lint` |
 | `extension/build/<target>/`       | Generated per-target loadable directory. Gitignored.         |
@@ -38,23 +40,23 @@ architecture, request catalog, and configuration schema live in
 # Extension changes:
 cd extension && make              # builds every known target (chrome + firefox)
 cd extension && make chrome       # builds build/chrome/ only
-cd extension && make firefox      # placeholder Firefox build (no WebSocket yet)
+cd extension && make firefox      # builds build/firefox/ only (Manifest V2)
                                   # `make lint` runs as part of each target build
 
 # Elisp changes — byte-compile to catch warnings before reload.
 # Either let package.el resolve `websocket`:
 emacs --batch -Q --eval '(progn (require (quote package)) (package-initialize))' -L . \
-  --eval '(dolist (f (list "chrome-server.el" "chrome-server-www.el" \
-                           "chrome-server-chatgpt.el" "chrome-server-youtube.el" \
-                           "chrome-server-babel.el")) \
+  --eval '(dolist (f (list "browsel.el" "browsel-www.el" \
+                           "browsel-chatgpt.el" "browsel-youtube.el" \
+                           "browsel-babel.el")) \
            (or (byte-compile-file f) (kill-emacs 1)))'
 # ...or add the websocket package's directory with `-L` if the user uses
 # straight.el or similar:  -L <path-to-websocket>
 
 # Reload in the user's running Emacs:
-emacsclient -e '(progn (chrome-server-stop) \
-                       (load-file "chrome-server.el") \
-                       (chrome-server-start))'
+emacsclient -e '(progn (browsel-stop) \
+                       (load-file "browsel.el") \
+                       (browsel-start))'
 
 # Confirm the WS is reachable:
 lsof -nP -iTCP:9130 -sTCP:LISTEN
@@ -70,7 +72,7 @@ card in `chrome://extensions` — `make build` alone doesn't restart Chrome.
   historical context if a decision seems weird.
 - `ai/gotchas.md` — non-obvious failure modes encountered during the build
   that aren't documented elsewhere.  Read before debugging.
-- `~/.claude/skills/chrome-server/` — how to *use* the bridge from a
+- `~/.claude/skills/browsel/` — how to *use* the bridge from a
   Claude Code session (read tabs, eval JS, etc.).  Distinct from
   building the bridge itself.
 

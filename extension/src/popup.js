@@ -10,6 +10,19 @@ const statusText  = document.getElementById("status-text");
 const messageEl   = document.getElementById("message");
 const customEl    = document.getElementById("custom-actions");
 const optionsLink = document.getElementById("options-link");
+const logoEl      = document.getElementById("logo");
+
+const LOGO_DEFAULT = "../icons/icon128.png";
+const LOGO_RED     = "../icons/icon-red-128.png";
+
+function isConsentLive(info) {
+  return info?.state === "granted"
+      && (info.expiry == null || info.expiry > Date.now());
+}
+
+function setLogoForConsent(info) {
+  logoEl.src = isConsentLive(info) ? LOGO_RED : LOGO_DEFAULT;
+}
 
 function setStatus(status) {
   dot.className = "dot " + (status?.toLowerCase() ?? "disconnected");
@@ -79,6 +92,7 @@ function setConsentUI(tabId, info) {
   stateEl.textContent = text;
   stateEl.className   = "consent-state " + cls;
   buttonsEl.innerHTML = "";
+  setLogoForConsent(info);
 
   const mkBtn = (label, type, kind) => {
     const b = document.createElement("button");
@@ -114,6 +128,7 @@ async function renderConsent() {
     stateEl.textContent = "(no active tab)";
     stateEl.className   = "consent-state absent";
     buttonsEl.innerHTML = "";
+    setLogoForConsent(null);
     return;
   }
   const r = await sendToBackground({

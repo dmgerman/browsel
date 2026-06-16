@@ -1,11 +1,11 @@
-;;; chrome-server.el --- WebSocket bridge to a Chrome MV3 extension  -*- lexical-binding: t; -*-
+;;; browsel.el --- WebSocket bridge to a Chrome/Firefox extension  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Daniel M. German <dmg@turingmachine.org>
 
 ;; Author: Daniel M. German <dmg@turingmachine.org>
 ;; Maintainer: Daniel M. German <dmg@turingmachine.org>
 ;; Keywords: comm, tools, browser, org
-;; URL: https://github.com/dmgerman/chrome-server
+;; URL: https://github.com/dmgerman/browsel
 ;; Package-Requires: ((emacs "27.1") (websocket "1.13"))
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -33,9 +33,9 @@
 ;;
 ;; Request names are SCREAMING_SNAKE_CASE.  Incoming requests are
 ;; dispatched to handlers registered with
-;; `chrome-server-register-handler'.  Outgoing requests are made with
-;; `chrome-server-request-async' (callback-based) or
-;; `chrome-server-request' (sync wrapper using `accept-process-output').
+;; `browsel-register-handler'.  Outgoing requests are made with
+;; `browsel-request-async' (callback-based) or
+;; `browsel-request' (sync wrapper using `accept-process-output').
 ;;
 ;; Built-in handlers:
 ;;
@@ -45,14 +45,14 @@
 ;;
 ;; Per-feature backends register additional handlers:
 ;;
-;;   chrome-server-chatgpt.el  -- CHATGPT
-;;   chrome-server-www.el      -- SAVE_PAGE
-;;   chrome-server-youtube.el  -- YOUTUBE, YOUTUBE_TRANSCRIPT
+;;   browsel-chatgpt.el  -- CHATGPT
+;;   browsel-www.el      -- SAVE_PAGE
+;;   browsel-youtube.el  -- YOUTUBE, YOUTUBE_TRANSCRIPT
 ;;
 ;; Usage:
-;;   (require 'chrome-server)
-;;   (chrome-server-start)   ; start the server
-;;   (chrome-server-stop)    ; stop the server
+;;   (require 'browsel)
+;;   (browsel-start)   ; start the server
+;;   (browsel-stop)    ; stop the server
 
 ;;; Code:
 
@@ -70,79 +70,79 @@
 (declare-function org-roam-capture-    "org-roam"    (&rest args))
 (declare-function org-roam-node-create "org-roam"    (&rest args))
 
-(defconst chrome-server-version "0.72"
-  "Current version of the chrome-server package.")
+(defconst browsel-version "0.8"
+  "Current version of the browsel package.")
 
 ;;;###autoload
-(defun chrome-server-version (&optional here)
-  "Return the chrome-server version string.
+(defun browsel-version (&optional here)
+  "Return the browsel version string.
 Interactively, display the version in the echo area.  With prefix
 argument HERE, insert the version at point instead.  When called
 from Lisp the return value is always the version string."
   (interactive "P")
-  (let ((string (format "chrome-server %s" chrome-server-version)))
+  (let ((string (format "browsel %s" browsel-version)))
     (cond
      (here
       (insert string))
      ((called-interactively-p 'interactive)
       (message "%s" string))))
-  chrome-server-version)
+  browsel-version)
 
 ;; ── Configuration ────────────────────────────────────────────────────────────
 
-(defvar chrome-server-port 9130
+(defvar browsel-port 9130
   "Port the Chrome server WebSocket server listens on.")
 
-(defvar chrome-server-host 'local
+(defvar browsel-host 'local
   "Host the WebSocket server binds to.  `local' = 127.0.0.1.")
 
-(defvar chrome-server-org-capture-key nil
+(defvar browsel-org-capture-key nil
   "Org-capture template key used by the ORG_CAPTURE handler.
 nil means the user selects the template interactively.")
 
-(defvar chrome-server-request-timeout 10
+(defvar browsel-request-timeout 10
   "Seconds to wait for a response to an Emacs-initiated request before timing out.")
 
-(defvar chrome-server-debug nil
-  "When non-nil, log every WebSocket frame to *chrome-server* buffer.")
+(defvar browsel-debug nil
+  "When non-nil, log every WebSocket frame to *browsel* buffer.")
 
-(defvar chrome-server-pandoc-executable "pandoc"
+(defvar browsel-pandoc-executable "pandoc"
   "Path to the pandoc executable used for HTML → org conversion.
-Shared by chrome-server-www and chrome-server-chatgpt backends.")
+Shared by browsel-www and browsel-chatgpt backends.")
 
 ;; ── State ────────────────────────────────────────────────────────────────────
 
-(defvar chrome-server--server-process nil
+(defvar browsel--server-process nil
   "The `websocket-server' process, or nil if not running.")
 
-(defvar chrome-server--clients nil
+(defvar browsel--clients nil
   "Alist of currently connected clients as (NAME . WS) pairs.
 NAME is the identifier the client announced via CLIENT_HELLO, or
 \"unknown-N\" until the client identifies itself.  WS is the
 underlying websocket object.")
 
-(defvar chrome-server--connect-counter 0
+(defvar browsel--connect-counter 0
   "Monotonic counter for naming unidentified clients.
-Reset on `chrome-server-start'; never decrements during a server's
+Reset on `browsel-start'; never decrements during a server's
 lifetime so two unidentified connections cannot collide on the
 same fallback name.")
 
-(defvar chrome-server--current-ws nil
+(defvar browsel--current-ws nil
   "Websocket currently being dispatched, bound during handler execution.
 Built-in handlers (notably CLIENT_HELLO) read this to discover which
 client sent the request.  User-registered handlers should ignore it.")
 
-(defvar chrome-server--handlers nil
+(defvar browsel--handlers nil
   "Alist mapping request name (string) to handler function.
 Handler is called with one argument, the request payload (a plist),
 and must return a value JSON-encodable as the response payload.")
 
-(defvar chrome-server--pending-callbacks nil
+(defvar browsel--pending-callbacks nil
   "Alist mapping outstanding request id (string) to (CALLBACK . TIMER).
 CALLBACK is invoked with the decoded response payload.  TIMER is the
 `run-at-time' timer that aborts the request on timeout.")
 
-(defvar chrome-server--rx-buffers nil
+(defvar browsel--rx-buffers nil
   "Per-client accumulators for in-progress fragmented messages.
 Alist mapping each client websocket to the bytes received so far for
 the in-progress fragmented message on that connection.  Cleared once
@@ -150,90 +150,90 @@ the final fragment (FIN bit set) arrives or the client disconnects.")
 
 ;; ── Debug logging ────────────────────────────────────────────────────────────
 
-(defun chrome-server--log (fmt &rest args)
-  "Append FMT formatted with ARGS to *chrome-server* when debug is enabled."
-  (when chrome-server-debug
-    (with-current-buffer (get-buffer-create "*chrome-server*")
+(defun browsel--log (fmt &rest args)
+  "Append FMT formatted with ARGS to *browsel* when debug is enabled."
+  (when browsel-debug
+    (with-current-buffer (get-buffer-create "*browsel*")
       (goto-char (point-max))
       (insert (format-time-string "[%H:%M:%S.%3N] ")
               (apply #'format fmt args)
               "\n"))))
 
-(defun chrome-server--warn (fmt &rest args)
-  "Surface a chrome-server warning to the user and the debug log.
+(defun browsel--warn (fmt &rest args)
+  "Surface a browsel warning to the user and the debug log.
 FMT and ARGS are passed through `format'.  The formatted message is
-emitted to *Messages* and appended to the *chrome-server* debug
+emitted to *Messages* and appended to the *browsel* debug
 buffer."
   (let ((msg (apply #'format fmt args)))
-    (message "chrome-server: %s" msg)
-    (chrome-server--log "[WARN] %s" msg)))
+    (message "browsel: %s" msg)
+    (browsel--log "[WARN] %s" msg)))
 
 ;; ── Server lifecycle ─────────────────────────────────────────────────────────
 
 ;;;###autoload
-(defun chrome-server-start ()
-  "Start the Chrome server WebSocket server on `chrome-server-port'."
+(defun browsel-start ()
+  "Start the Chrome server WebSocket server on `browsel-port'."
   (interactive)
-  (when (and chrome-server--server-process
-             (not (eq (process-status chrome-server--server-process) 'closed)))
-    (chrome-server-stop))
-  (setq chrome-server--clients nil
-        chrome-server--connect-counter 0
-        chrome-server--pending-callbacks nil
-        chrome-server--server-process
+  (when (and browsel--server-process
+             (not (eq (process-status browsel--server-process) 'closed)))
+    (browsel-stop))
+  (setq browsel--clients nil
+        browsel--connect-counter 0
+        browsel--pending-callbacks nil
+        browsel--server-process
         (websocket-server
-         chrome-server-port
-         :host chrome-server-host
-         :on-open    #'chrome-server--on-open
-         :on-close   #'chrome-server--on-close
-         :on-message #'chrome-server--on-message
-         :on-error   #'chrome-server--on-error))
-  (chrome-server--log "[SERVER] started on port %d" chrome-server-port)
-  (message "Chrome server (WS) started on port %d" chrome-server-port))
+         browsel-port
+         :host browsel-host
+         :on-open    #'browsel--on-open
+         :on-close   #'browsel--on-close
+         :on-message #'browsel--on-message
+         :on-error   #'browsel--on-error))
+  (browsel--log "[SERVER] started on port %d" browsel-port)
+  (message "Chrome server (WS) started on port %d" browsel-port))
 
 ;;;###autoload
-(defun chrome-server-stop ()
+(defun browsel-stop ()
   "Stop the Chrome server WebSocket server."
   (interactive)
-  (when chrome-server--server-process
-    (websocket-server-close chrome-server--server-process)
-    (setq chrome-server--server-process nil))
-  (chrome-server--cancel-all-pending "server stopped")
-  (setq chrome-server--clients nil
-        chrome-server--connect-counter 0)
-  (chrome-server--log "[SERVER] stopped")
+  (when browsel--server-process
+    (websocket-server-close browsel--server-process)
+    (setq browsel--server-process nil))
+  (browsel--cancel-all-pending "server stopped")
+  (setq browsel--clients nil
+        browsel--connect-counter 0)
+  (browsel--log "[SERVER] stopped")
   (message "Chrome server stopped"))
 
 ;; ── Connection callbacks ─────────────────────────────────────────────────────
 
-(defun chrome-server--on-open (ws)
+(defun browsel--on-open (ws)
   "Register newly connected client WS under a placeholder name.
 The client should send a CLIENT_HELLO request as its first frame to
 replace the placeholder with a stable identifier."
-  (let ((name (format "unknown-%d" (cl-incf chrome-server--connect-counter))))
-    (setq chrome-server--clients
-          (cons (cons name ws) chrome-server--clients))
-    (chrome-server--log "[CONNECT] %s (clients=%d)"
-                        name (length chrome-server--clients))))
+  (let ((name (format "unknown-%d" (cl-incf browsel--connect-counter))))
+    (setq browsel--clients
+          (cons (cons name ws) browsel--clients))
+    (browsel--log "[CONNECT] %s (clients=%d)"
+                        name (length browsel--clients))))
 
-(defun chrome-server--on-close (ws)
+(defun browsel--on-close (ws)
   "Remove disconnected client WS and drop its rx buffer."
-  (let ((cell (rassq ws chrome-server--clients)))
-    (setq chrome-server--clients
-          (cl-remove-if (lambda (c) (eq (cdr c) ws)) chrome-server--clients)
-          chrome-server--rx-buffers
-          (cl-remove-if (lambda (c) (eq (car c) ws)) chrome-server--rx-buffers))
-    (chrome-server--log "[DISCONNECT] %s (clients=%d)"
+  (let ((cell (rassq ws browsel--clients)))
+    (setq browsel--clients
+          (cl-remove-if (lambda (c) (eq (cdr c) ws)) browsel--clients)
+          browsel--rx-buffers
+          (cl-remove-if (lambda (c) (eq (car c) ws)) browsel--rx-buffers))
+    (browsel--log "[DISCONNECT] %s (clients=%d)"
                         (if cell (car cell) "?")
-                        (length chrome-server--clients))))
+                        (length browsel--clients))))
 
-(defun chrome-server--on-error (_ws sym err)
+(defun browsel--on-error (_ws sym err)
   "Surface WebSocket error ERR in callback SYM."
-  (chrome-server--warn "error in %s: %S" sym err))
+  (browsel--warn "error in %s: %S" sym err))
 
 ;; ── Dispatch ─────────────────────────────────────────────────────────────────
 
-(defun chrome-server--on-message (ws frame)
+(defun browsel--on-message (ws frame)
   "Accumulate FRAME bytes for WS; dispatch once a complete message arrives.
 A WebSocket message may be split across many frames (large payloads such
 as page HTML routinely run into the hundreds of KB).  We keep a per-client
@@ -242,24 +242,24 @@ final frame.  Frames with a `:name' field are requests; frames with a
 `:requestId' field are responses to Emacs-initiated requests."
   (let* ((text       (or (websocket-frame-text frame) ""))
          (complete-p (websocket-frame-completep frame))
-         (prior-cell (assq ws chrome-server--rx-buffers))
+         (prior-cell (assq ws browsel--rx-buffers))
          (combined   (concat (cdr prior-cell) text)))
     (cond
      ;; Still receiving — stash and wait.
      ((not complete-p)
       (if prior-cell
           (setcdr prior-cell combined)
-        (setq chrome-server--rx-buffers
-              (cons (cons ws combined) chrome-server--rx-buffers)))
-      (chrome-server--log "[RECV-CONT] +%d byte(s); total=%d"
+        (setq browsel--rx-buffers
+              (cons (cons ws combined) browsel--rx-buffers)))
+      (browsel--log "[RECV-CONT] +%d byte(s); total=%d"
                           (length text) (length combined)))
      ;; Final fragment — drop the accumulator and dispatch.
      (t
       (when prior-cell
-        (setq chrome-server--rx-buffers
+        (setq browsel--rx-buffers
               (cl-remove-if (lambda (c) (eq (car c) ws))
-                            chrome-server--rx-buffers)))
-      (chrome-server--log "[RECV] %d byte(s)" (length combined))
+                            browsel--rx-buffers)))
+      (browsel--log "[RECV] %d byte(s)" (length combined))
       (let ((msg (condition-case err
                      (json-parse-string combined
                                         :object-type 'plist
@@ -267,79 +267,79 @@ final frame.  Frames with a `:name' field are requests; frames with a
                                         :null-object nil
                                         :false-object nil)
                    (error
-                    (chrome-server--warn "could not parse frame as JSON: %s"
+                    (browsel--warn "could not parse frame as JSON: %s"
                                          (error-message-string err))
                     nil))))
         (cond
          ((null msg) nil)
          ((plist-get msg :name)
-          (chrome-server--handle-request ws msg))
+          (browsel--handle-request ws msg))
          ((plist-get msg :requestId)
-          (chrome-server--handle-response msg))
+          (browsel--handle-response msg))
          (t
-          (chrome-server--warn "unknown frame shape (no :name or :requestId): %S"
+          (browsel--warn "unknown frame shape (no :name or :requestId): %S"
                                msg))))))))
 
-(defun chrome-server--handle-request (ws msg)
+(defun browsel--handle-request (ws msg)
   "Look up handler for MSG and send the response back over WS."
   (let* ((name    (plist-get msg :name))
          (id      (or (plist-get msg :id) "<unknown>"))
          (payload (plist-get msg :payload))
-         (handler (cdr (assoc name chrome-server--handlers))))
+         (handler (cdr (assoc name browsel--handlers))))
     (let ((response-payload
            (if handler
                (condition-case err
-                   (let ((chrome-server--current-ws ws))
+                   (let ((browsel--current-ws ws))
                      (funcall handler payload))
                  (error
-                  (chrome-server--warn "handler %s signalled: %s"
+                  (browsel--warn "handler %s signalled: %s"
                                        name (error-message-string err))
                   `((status . "error")
                     (message . ,(error-message-string err)))))
              (progn
-               (chrome-server--warn "no handler registered for request: %s"
+               (browsel--warn "no handler registered for request: %s"
                                     name)
                `((status . "error")
                  (message . ,(format "Unknown request: %s" name)))))))
       ;; Surface the handler's status line to the user.  Errors are
-      ;; already reported via `chrome-server--warn' in the error path
+      ;; already reported via `browsel--warn' in the error path
       ;; above, so we only message on success here to avoid duplicates.
       (let ((status (alist-get 'status response-payload))
             (text   (alist-get 'message response-payload)))
         (when (and text (equal status "ok"))
-          (message "chrome-server [%s]: %s" name text)))
-      (chrome-server--send-to ws
+          (message "browsel [%s]: %s" name text)))
+      (browsel--send-to ws
                               `((requestId . ,id)
                                 (payload   . ,response-payload))))))
 
-(defun chrome-server--handle-response (msg)
+(defun browsel--handle-response (msg)
   "Invoke the pending callback for MSG's requestId.
 If no pending callback matches (likely already timed out), surfaces a warning."
   (let* ((id   (plist-get msg :requestId))
-         (cell (assoc id chrome-server--pending-callbacks)))
+         (cell (assoc id browsel--pending-callbacks)))
     (if (null cell)
-        (chrome-server--warn "response for unknown/timed-out request id: %s" id)
+        (browsel--warn "response for unknown/timed-out request id: %s" id)
       (let ((callback (cadr cell))
             (timer    (cddr cell)))
         (when (timerp timer) (cancel-timer timer))
-        (setq chrome-server--pending-callbacks
+        (setq browsel--pending-callbacks
               (cl-remove-if (lambda (c) (equal (car c) id))
-                            chrome-server--pending-callbacks))
+                            browsel--pending-callbacks))
         (condition-case err
             (funcall callback (plist-get msg :payload))
           (error
-           (chrome-server--warn "response callback for %s signalled: %s"
+           (browsel--warn "response callback for %s signalled: %s"
                                 id (error-message-string err))))))))
 
 ;; ── Sending ──────────────────────────────────────────────────────────────────
 
-(defun chrome-server--send-to (ws data)
+(defun browsel--send-to (ws data)
   "JSON-encode DATA and send it on WS."
   (let ((text (json-encode data)))
-    (chrome-server--log "[SEND] %s" text)
+    (browsel--log "[SEND] %s" text)
     (websocket-send-text ws text)))
 
-(defun chrome-server--target-for (client name)
+(defun browsel--target-for (client name)
   "Resolve a request target without signalling.
 Returns one of:
   (ok   . WS)  — send to WS.
@@ -349,92 +349,92 @@ Returns one of:
 NAME appears in MSG and is informational only."
   (cond
    (client
-    (let ((cell (assoc client chrome-server--clients)))
+    (let ((cell (assoc client browsel--clients)))
       (if cell
           (cons 'ok (cdr cell))
         (cons 'err
               (format
                "requested client %S is not connected (connected: %s)"
                client
-               (if chrome-server--clients
-                   (mapconcat #'car chrome-server--clients ", ")
+               (if browsel--clients
+                   (mapconcat #'car browsel--clients ", ")
                  "none"))))))
-   ((null chrome-server--clients)
+   ((null browsel--clients)
     (cons 'none (format "no client connected; dropping request %s" name)))
-   ((= 1 (length chrome-server--clients))
-    (cons 'ok (cdar chrome-server--clients)))
+   ((= 1 (length browsel--clients))
+    (cons 'ok (cdar browsel--clients)))
    (t
     (cons 'err
           (format "%d clients connected (%s); specify CLIENT for request %S"
-                  (length chrome-server--clients)
-                  (mapconcat #'car chrome-server--clients ", ")
+                  (length browsel--clients)
+                  (mapconcat #'car browsel--clients ", ")
                   name)))))
 
-(defun chrome-server-connected-clients ()
+(defun browsel-connected-clients ()
   "Return the list of connected client names, in connection order (newest first)."
-  (mapcar #'car chrome-server--clients))
+  (mapcar #'car browsel--clients))
 
-(defun chrome-server--broadcast (data &optional client)
+(defun browsel--broadcast (data &optional client)
   "JSON-encode DATA and send it to one connected client.
 With CLIENT nil and exactly one client connected, that client is the
 target.  With CLIENT a string, the matching named client is targeted.
 Returns the websocket the frame was sent on, or nil if the resolution
 fails (also surfaces a warning so the failure is not silent)."
-  (pcase (chrome-server--target-for client (alist-get 'name data))
+  (pcase (browsel--target-for client (alist-get 'name data))
     (`(ok . ,ws)
-     (chrome-server--send-to ws data)
+     (browsel--send-to ws data)
      ws)
     (`(err . ,msg)
-     (chrome-server--warn "%s" msg)
+     (browsel--warn "%s" msg)
      nil)
     (`(none . ,msg)
-     (chrome-server--warn "%s" msg)
+     (browsel--warn "%s" msg)
      nil)))
 
 ;; ── Handler registry ─────────────────────────────────────────────────────────
 
-(defun chrome-server-register-handler (name handler)
+(defun browsel-register-handler (name handler)
   "Register HANDLER as the handler for request NAME.
 NAME is a SCREAMING_SNAKE_CASE string.  HANDLER is called with the
 request payload (a plist) and must return a value JSON-encodable as the
 response payload.  Re-registering overwrites the previous binding."
-  (setq chrome-server--handlers
+  (setq browsel--handlers
         (cons (cons name handler)
               (cl-remove-if (lambda (c) (string= (car c) name))
-                            chrome-server--handlers))))
+                            browsel--handlers))))
 
-(defun chrome-server-unregister-handler (name)
+(defun browsel-unregister-handler (name)
   "Remove the handler for request NAME, if any."
-  (setq chrome-server--handlers
+  (setq browsel--handlers
         (cl-remove-if (lambda (c) (string= (car c) name))
-                      chrome-server--handlers)))
+                      browsel--handlers)))
 
 ;; ── Built-in CLIENT_HELLO handler ────────────────────────────────────────────
 
-(defun chrome-server--unique-client-name (requested ws &optional n)
+(defun browsel--unique-client-name (requested ws &optional n)
   "Return REQUESTED, possibly with a -N suffix, that no other ws holds.
 WS is permitted to already own the requested name (idempotent reuse).
 Optional N is an internal recursion counter; callers should omit it."
   (let* ((n         (or n 1))
          (candidate (if (= n 1) requested (format "%s-%d" requested n)))
-         (cell      (assoc candidate chrome-server--clients)))
+         (cell      (assoc candidate browsel--clients)))
     (if (or (not cell) (eq (cdr cell) ws))
         candidate
-      (chrome-server--unique-client-name requested ws (1+ n)))))
+      (browsel--unique-client-name requested ws (1+ n)))))
 
-(defun chrome-server--handle-client-hello (payload)
+(defun browsel--handle-client-hello (payload)
   "Built-in CLIENT_HELLO handler.
 Renames the entry for the websocket currently being dispatched to
 the client name announced in PAYLOAD, with a -N suffix appended if
 the name is already taken by a different websocket.
 
 The PAYLOAD must include a `:version' string that exactly matches
-`chrome-server-version'.  The version check is strict: any mismatch
+`browsel-version'.  The version check is strict: any mismatch
 (including a missing or empty version) rejects the hello with an
 error payload, leaves the client unregistered (its placeholder
 \"unknown-N\" name persists), and the extension's ws-client treats
 the connection as incompatible and stops the reconnect loop."
-  (let ((ws       chrome-server--current-ws)
+  (let ((ws       browsel--current-ws)
         (requested (plist-get payload :client))
         (version   (plist-get payload :version)))
     (unless ws
@@ -443,30 +443,30 @@ the connection as incompatible and stops the reconnect loop."
       (error "CLIENT_HELLO requires payload.client (non-empty string)"))
     (unless (and (stringp version) (not (string-empty-p version)))
       (error "CLIENT_HELLO requires payload.version (non-empty string); \
-emacs=%s, extension sent: %S" chrome-server-version version))
-    (unless (string= version chrome-server-version)
+emacs=%s, extension sent: %S" browsel-version version))
+    (unless (string= version browsel-version)
       (error "version mismatch: emacs=%s extension=%s; \
 rebuild and reload both sides"
-             chrome-server-version version))
-    (let* ((final-name (chrome-server--unique-client-name requested ws))
+             browsel-version version))
+    (let* ((final-name (browsel--unique-client-name requested ws))
            (others     (cl-remove-if (lambda (c) (eq (cdr c) ws))
-                                     chrome-server--clients)))
-      (setq chrome-server--clients
+                                     browsel--clients)))
+      (setq browsel--clients
             (cons (cons final-name ws) others))
-      (chrome-server--log "[HELLO] %s (clients=%d)"
-                          final-name (length chrome-server--clients))
+      (browsel--log "[HELLO] %s (clients=%d)"
+                          final-name (length browsel--clients))
       `((status . "ok")
         (client . ,final-name)))))
 
-(chrome-server-register-handler "CLIENT_HELLO"
-                                #'chrome-server--handle-client-hello)
+(browsel-register-handler "CLIENT_HELLO"
+                                #'browsel--handle-client-hello)
 
 ;; ── Async request primitive (Emacs → browser) ────────────────────────────────
 
-(defun chrome-server--cancel-all-pending (reason)
+(defun browsel--cancel-all-pending (reason)
   "Cancel every pending callback with an error payload citing REASON."
-  (let ((pending chrome-server--pending-callbacks))
-    (setq chrome-server--pending-callbacks nil)
+  (let ((pending browsel--pending-callbacks))
+    (setq browsel--pending-callbacks nil)
     (dolist (cell pending)
       (let ((id       (car cell))
             (callback (cadr cell))
@@ -475,13 +475,13 @@ rebuild and reload both sides"
         (condition-case err
             (funcall callback `(:status "error" :message ,reason))
           (error
-           (chrome-server--warn "cancellation callback for %s signalled: %s"
+           (browsel--warn "cancellation callback for %s signalled: %s"
                                 id (error-message-string err))))))))
 
-(defun chrome-server-request-async (name payload callback &optional client)
+(defun browsel-request-async (name payload callback &optional client)
   "Send a request NAME with PAYLOAD to the browser; invoke CALLBACK on response.
 CALLBACK receives the decoded response payload (a plist).  If the
-request times out (`chrome-server-request-timeout' seconds) CALLBACK is
+request times out (`browsel-request-timeout' seconds) CALLBACK is
 called with (:status \"error\" :message \"timeout\").  Returns the
 request id, or nil if no client is connected.
 
@@ -489,44 +489,44 @@ CLIENT, if non-nil, names which connected client to target (e.g.
 \"chrome\", \"firefox\").  When omitted, the request is sent to the
 sole connected client; when more than one is connected, CALLBACK is
 invoked with a status:error payload and nil is returned."
-  (pcase (chrome-server--target-for client name)
+  (pcase (browsel--target-for client name)
     (`(ok . ,ws)
      (let* ((id    (org-id-uuid))
-            (timer (run-at-time chrome-server-request-timeout nil
-                                #'chrome-server--timeout-request id)))
-       (setq chrome-server--pending-callbacks
+            (timer (run-at-time browsel-request-timeout nil
+                                #'browsel--timeout-request id)))
+       (setq browsel--pending-callbacks
              (cons (cons id (cons callback timer))
-                   chrome-server--pending-callbacks))
-       (chrome-server--send-to ws
+                   browsel--pending-callbacks))
+       (browsel--send-to ws
                                `((id      . ,id)
                                  (name    . ,name)
                                  (payload . ,(or payload :null))))
        id))
     (`(err . ,msg)
-     (chrome-server--warn "%s" msg)
+     (browsel--warn "%s" msg)
      (funcall callback `(:status "error" :message ,msg))
      nil)
     (`(none . ,msg)
-     (chrome-server--warn "%s" msg)
+     (browsel--warn "%s" msg)
      (funcall callback '(:status "error" :message "no client connected"))
      nil)))
 
-(defun chrome-server--timeout-request (id)
+(defun browsel--timeout-request (id)
   "Time out the pending request with ID."
-  (let ((cell (assoc id chrome-server--pending-callbacks)))
+  (let ((cell (assoc id browsel--pending-callbacks)))
     (when cell
-      (setq chrome-server--pending-callbacks
+      (setq browsel--pending-callbacks
             (cl-remove-if (lambda (c) (equal (car c) id))
-                          chrome-server--pending-callbacks))
-      (chrome-server--warn "request %s timed out after %ss"
-                           id chrome-server-request-timeout)
+                          browsel--pending-callbacks))
+      (browsel--warn "request %s timed out after %ss"
+                           id browsel-request-timeout)
       (condition-case err
           (funcall (cadr cell) '(:status "error" :message "timeout"))
         (error
-         (chrome-server--warn "timeout callback for %s signalled: %s"
+         (browsel--warn "timeout callback for %s signalled: %s"
                               id (error-message-string err)))))))
 
-(defun chrome-server-request (name &optional payload client)
+(defun browsel-request (name &optional payload client)
   "Synchronously send NAME/PAYLOAD to the browser and return the response payload.
 Blocks via `accept-process-output' until the response arrives or the
 timeout elapses.  Signals an error on timeout, when no client is
@@ -536,20 +536,20 @@ Do NOT use this from inside a websocket callback — it can re-enter
 the dispatcher.
 
 CLIENT, if non-nil, names the client to target (e.g. \"chrome\",
-\"firefox\").  See `chrome-server-connected-clients' for the current
+\"firefox\").  See `browsel-connected-clients' for the current
 roster."
-  (catch 'chrome-server--result
-    (let ((id (chrome-server-request-async
+  (catch 'browsel--result
+    (let ((id (browsel-request-async
                name payload
                (lambda (response)
-                 (throw 'chrome-server--result response))
+                 (throw 'browsel--result response))
                client)))
       (unless id
         ;; Request-async already warned and invoked the callback with a
         ;; status:error payload, so escalate to an error here too.
-        (error "chrome-server-request: no acceptable target for %s" name))
+        (error "browsel-request: no acceptable target for %s" name))
       (let ((deadline (+ (float-time)
-                         (+ 0.5 chrome-server-request-timeout))))
+                         (+ 0.5 browsel-request-timeout))))
         (cl-labels
             ((pump ()
                (cond
@@ -562,7 +562,7 @@ roster."
 
 ;; ── Convenience: respond-fast-then-defer ─────────────────────────────────────
 
-(defun chrome-server-defer (fn &rest args)
+(defun browsel-defer (fn &rest args)
   "Schedule FN to run with ARGS on the next idle tick.
 Use inside a handler that wants to return immediately while the real
 work happens out-of-band."
@@ -570,51 +570,51 @@ work happens out-of-band."
 
 ;; ── Payload cache (preserved across the rewrite) ─────────────────────────────
 ;;
-;; Templates pull these via %(chrome-server-get-url) etc.  The variables
-;; are populated by `chrome-server--prime-payload-cache' inside each
+;; Templates pull these via %(browsel-get-url) etc.  The variables
+;; are populated by `browsel--prime-payload-cache' inside each
 ;; capture handler.
 
-(defvar chrome-server--current-url nil
-  "URL from the most recent chrome-server payload.")
+(defvar browsel--current-url nil
+  "URL from the most recent browsel payload.")
 
-(defvar chrome-server--current-title nil
-  "Title from the most recent chrome-server payload.")
+(defvar browsel--current-title nil
+  "Title from the most recent browsel payload.")
 
-(defvar chrome-server--current-text nil
-  "Selected text from the most recent chrome-server payload.")
+(defvar browsel--current-text nil
+  "Selected text from the most recent browsel payload.")
 
-(defun chrome-server-get-url ()
+(defun browsel-get-url ()
   "Return the URL from the current payload and clear it.
 Returns an empty string if not set or already consumed."
-  (prog1 (or chrome-server--current-url "")
-    (setq chrome-server--current-url nil)))
+  (prog1 (or browsel--current-url "")
+    (setq browsel--current-url nil)))
 
-(defun chrome-server-get-title ()
+(defun browsel-get-title ()
   "Return the title from the current payload and clear it.
 Returns an empty string if not set or already consumed."
-  (prog1 (or chrome-server--current-title "")
-    (setq chrome-server--current-title nil)))
+  (prog1 (or browsel--current-title "")
+    (setq browsel--current-title nil)))
 
-(defun chrome-server-get-selection ()
+(defun browsel-get-selection ()
   "Return the selected text from the current payload and clear it.
 Returns an empty string if not set or already consumed."
-  (prog1 (or chrome-server--current-text "")
-    (setq chrome-server--current-text nil)))
+  (prog1 (or browsel--current-text "")
+    (setq browsel--current-text nil)))
 
-(defun chrome-server--prime-payload-cache (payload)
+(defun browsel--prime-payload-cache (payload)
   "Populate the payload cache vars from PAYLOAD."
-  (setq chrome-server--current-url   (plist-get payload :url)
-        chrome-server--current-title (or (plist-get payload :title) "")
-        chrome-server--current-text  (or (plist-get payload :text)  "")))
+  (setq browsel--current-url   (plist-get payload :url)
+        browsel--current-title (or (plist-get payload :title) "")
+        browsel--current-text  (or (plist-get payload :text)  "")))
 
 ;; ── Shared helpers ───────────────────────────────────────────────────────────
 
-(defun chrome-server--maybe-raise (payload)
+(defun browsel--maybe-raise (payload)
   "Raise and focus the selected Emacs frame if PAYLOAD's :raise is t."
   (when (eq (plist-get payload :raise) t)
     (select-frame-set-input-focus (selected-frame))))
 
-(defun chrome-server--capture-initial (payload)
+(defun browsel--capture-initial (payload)
   "Build the org-capture-initial string from PAYLOAD's url, title, and text."
   (let* ((url   (plist-get payload :url))
          (title (or (plist-get payload :title) "Web capture"))
@@ -622,18 +622,18 @@ Returns an empty string if not set or already consumed."
     (concat (format "[[%s][%s]]" url title)
             (unless (string-empty-p text) (concat "\n\n" text)))))
 
-(defun chrome-server--require-payload (payload)
+(defun browsel--require-payload (payload)
   "Signal if PAYLOAD is nil."
   (unless payload
     (error "Missing 'payload' in request")))
 
-(defun chrome-server--ok (&optional message)
+(defun browsel--ok (&optional message)
   "Return a standard OK response payload, optionally with MESSAGE."
   (if message
       `((status . "ok") (message . ,message))
     '((status . "ok"))))
 
-(defun chrome-server--strip-svg (html)
+(defun browsel--strip-svg (html)
   "Return HTML with every inline <svg>…</svg> block removed.
 Used by HTML→org backends to keep decorative icons out of the
 pandoc-extracted media (their fixed-pixel-less viewBox-only definitions
@@ -649,69 +649,69 @@ render at librsvg's huge default size in org buffers)."
 
 ;; ── Built-in handlers ────────────────────────────────────────────────────────
 
-(defun chrome-server--handle-org-capture (payload)
+(defun browsel--handle-org-capture (payload)
   "Handle ORG_CAPTURE request with PAYLOAD.
 Schedules the actual capture and returns immediately (respond-fast-then-defer)."
-  (chrome-server--require-payload payload)
-  (chrome-server-defer #'chrome-server--org-capture payload)
-  (chrome-server--ok "Org-capture opened"))
+  (browsel--require-payload payload)
+  (browsel-defer #'browsel--org-capture payload)
+  (browsel--ok "Org-capture opened"))
 
-(defun chrome-server--handle-org-roam-capture (payload)
+(defun browsel--handle-org-roam-capture (payload)
   "Handle ORG_ROAM_CAPTURE request with PAYLOAD.
 Schedules the actual capture and returns immediately (respond-fast-then-defer)."
-  (chrome-server--require-payload payload)
-  (chrome-server-defer #'chrome-server--org-roam-capture payload)
-  (chrome-server--ok "Org-roam-capture opened"))
+  (browsel--require-payload payload)
+  (browsel-defer #'browsel--org-roam-capture payload)
+  (browsel--ok "Org-roam-capture opened"))
 
-(defun chrome-server--handle-eww (payload)
+(defun browsel--handle-eww (payload)
   "Handle EWW request with PAYLOAD.
 Schedules the eww invocation and returns immediately
 \(respond-fast-then-defer)."
-  (chrome-server--require-payload payload)
+  (browsel--require-payload payload)
   (unless (plist-get payload :url)
     (error "Missing url in payload"))
-  (chrome-server-defer #'chrome-server--eww payload)
-  (chrome-server--ok "Opening in eww"))
+  (browsel-defer #'browsel--eww payload)
+  (browsel--ok "Opening in eww"))
 
 ;; ── Action implementations ───────────────────────────────────────────────────
 
-(defun chrome-server--org-capture (payload)
+(defun browsel--org-capture (payload)
   "Open `org-capture' pre-filled from PAYLOAD.
-Uses `chrome-server-org-capture-key' if set, otherwise prompts interactively."
+Uses `browsel-org-capture-key' if set, otherwise prompts interactively."
   (condition-case err
-      (let ((org-capture-initial (chrome-server--capture-initial payload)))
-        (chrome-server--prime-payload-cache payload)
-        (chrome-server--maybe-raise payload)
-        (org-capture nil chrome-server-org-capture-key))
+      (let ((org-capture-initial (browsel--capture-initial payload)))
+        (browsel--prime-payload-cache payload)
+        (browsel--maybe-raise payload)
+        (org-capture nil browsel-org-capture-key))
     (error
-     (chrome-server--warn "org-capture failed: %s" (error-message-string err)))))
+     (browsel--warn "org-capture failed: %s" (error-message-string err)))))
 
-(defun chrome-server--org-roam-capture (payload)
+(defun browsel--org-roam-capture (payload)
   "Open org-roam-capture, seeding the payload cache from PAYLOAD."
   (condition-case err
-      (let ((org-capture-initial (chrome-server--capture-initial payload)))
-        (chrome-server--prime-payload-cache payload)
-        (chrome-server--maybe-raise payload)
+      (let ((org-capture-initial (browsel--capture-initial payload)))
+        (browsel--prime-payload-cache payload)
+        (browsel--maybe-raise payload)
         (org-roam-capture-
          :node (org-roam-node-create)))
     (error
-     (chrome-server--warn "org-roam-capture failed: %s" (error-message-string err)))))
+     (browsel--warn "org-roam-capture failed: %s" (error-message-string err)))))
 
-(defun chrome-server--eww (payload)
+(defun browsel--eww (payload)
   "Open the URL from PAYLOAD in eww."
   (condition-case err
       (let ((url (plist-get payload :url)))
-        (chrome-server--maybe-raise payload)
+        (browsel--maybe-raise payload)
         (eww url))
     (error
-     (chrome-server--warn "eww failed: %s" (error-message-string err)))))
+     (browsel--warn "eww failed: %s" (error-message-string err)))))
 
 ;; ── Register built-in handlers ───────────────────────────────────────────────
 
-(chrome-server-register-handler "ORG_CAPTURE"      #'chrome-server--handle-org-capture)
-(chrome-server-register-handler "ORG_ROAM_CAPTURE" #'chrome-server--handle-org-roam-capture)
-(chrome-server-register-handler "EWW"              #'chrome-server--handle-eww)
+(browsel-register-handler "ORG_CAPTURE"      #'browsel--handle-org-capture)
+(browsel-register-handler "ORG_ROAM_CAPTURE" #'browsel--handle-org-roam-capture)
+(browsel-register-handler "EWW"              #'browsel--handle-eww)
 
-(provide 'chrome-server)
+(provide 'browsel)
 
-;;; chrome-server.el ends here
+;;; browsel.el ends here

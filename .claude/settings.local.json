@@ -33,7 +33,8 @@
       "Bash(make firefox *)",
       "Bash(make all *)",
       "Bash(emacs --batch -Q -L . -L /Users/dmg/.emacs.d/arm64/31.0.90/straight/repos/emacs-websocket --eval '\\(dolist \\(f \\(list \"chrome-server.el\" \"chrome-server-www.el\" \"chrome-server-chatgpt.el\" \"chrome-server-youtube.el\" \"chrome-server-babel.el\"\\)\\) \\(or \\(byte-compile-file f\\) \\(kill-emacs 1\\)\\)\\)')",
-      "WebSearch"
+      "WebSearch",
+      "Bash(emacs --batch -Q -L . -L /Users/dmg/.emacs.d/arm64/31.0.90/straight/repos/emacs-websocket --eval '\\(dolist \\(f \\(list \"browsel.el\" \"browsel-www.el\" \"browsel-chatgpt.el\" \"browsel-youtube.el\" \"browsel-babel.el\"\\)\\) \\(or \\(byte-compile-file f\\) \\(kill-emacs 1\\)\\)\\)')"
     ]
   }
 }

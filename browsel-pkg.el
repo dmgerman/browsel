@@ -1,19 +1,19 @@
-;;; chrome-server-pkg.el --- Package descriptor for chrome-server  -*- lexical-binding: t; -*-
+;;; browsel-pkg.el --- Package descriptor for browsel  -*- lexical-binding: t; -*-
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Copyright (C) 2026 Daniel M. German <dmg@turingmachine.org>
 
-;; This file declares chrome-server as a multi-file Emacs package.
+;; This file declares browsel as a multi-file Emacs package.
 ;; The optional backends (-www, -chatgpt, -youtube, -babel) are part
 ;; of the same distribution but are loaded only when the user calls
 ;; (require ...) on each.
 
-(define-package "chrome-server" "0.72"
+(define-package "browsel" "0.8"
   "Bidirectional bridge between Emacs and a Chrome/Firefox extension"
   '((emacs "27.1") (websocket "1.13"))
-  :url       "https://github.com/dmgerman/chrome-server"
+  :url       "https://github.com/dmgerman/browsel"
   :keywords  '("comm" "tools" "browser" "org")
   :maintainer '("Daniel M. German" . "dmg@turingmachine.org")
   :authors   '(("Daniel M. German" . "dmg@turingmachine.org")))
 
-;;; chrome-server-pkg.el ends here
+;;; browsel-pkg.el ends here

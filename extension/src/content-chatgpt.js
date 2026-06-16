@@ -267,7 +267,7 @@ api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         });
       })
       .catch((err) => {
-        console.error("chrome-server: scrollToLoadAll failed, falling back to visible turns:", err);
+        console.error("browsel: scrollToLoadAll failed, falling back to visible turns:", err);
         const turnsMap = new Map();
         const firstMsg = document.querySelector("[data-message-author-role]");
         if (firstMsg) collectVisible(turnsMap, findScrollableAncestor(firstMsg));

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Daniel M. German <dmg@turingmachine.org>
 //
-// ws-client.js — WebSocket client used by every chrome-server target.
+// ws-client.js — WebSocket client used by every browsel target.
 //
 // One entry point: `startWebSocketClient(options)`.  It opens a
 // WebSocket to the Emacs server, identifies itself with a CLIENT_HELLO
@@ -24,7 +24,7 @@
 //   options.version           REQUIRED string, the extension's
 //                             manifest version.  Sent alongside the
 //                             client name; Emacs requires an exact
-//                             match against its `chrome-server-version'
+//                             match against its `browsel-version'
 //                             or it rejects the hello and the
 //                             connection enters the terminal
 //                             INCOMPATIBLE state.

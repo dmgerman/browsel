@@ -6,7 +6,7 @@
 // Pages can trigger Emacs requests by posting a message like:
 //
 //   window.postMessage(
-//     { source: "chrome-server", name: "EWW", payload: { url: "..." } },
+//     { source: "browsel", name: "EWW", payload: { url: "..." } },
 //     "*"
 //   );
 //
@@ -19,7 +19,7 @@ const api = (typeof browser !== "undefined") ? browser : chrome;
 window.addEventListener("message", (event) => {
   if (event.source !== window) return;
   const data = event.data;
-  if (!data || data.source !== "chrome-server") return;
+  if (!data || data.source !== "browsel") return;
   if (typeof data.name !== "string" || !data.name) return;
   api.runtime.sendMessage({
     target:  "service-worker",

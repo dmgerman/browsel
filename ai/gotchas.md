@@ -76,13 +76,13 @@ initial frame with FIN=0 plus several continuation frames.  Naïvely
 JSON-parsing each frame yields one truncated parse plus several
 garbage parses, surfacing as a flurry of:
 
-    chrome-server: could not parse frame as JSON: End of file while parsing JSON
-    chrome-server: could not parse frame as JSON: could not parse JSON stream
+    browsel: could not parse frame as JSON: End of file while parsing JSON
+    browsel: could not parse frame as JSON: could not parse JSON stream
 
 Fix: accumulate frame text into a per-client buffer keyed by the
 websocket object, only parse when `(websocket-frame-completep frame)`
-returns t.  Pattern is in `chrome-server.el` →
-`chrome-server--on-message` + `chrome-server--rx-buffers`.
+returns t.  Pattern is in `browsel.el` →
+`browsel--on-message` + `browsel--rx-buffers`.
 
 Clean up the buffer on `:on-close` too — stale connections leak
 their accumulator otherwise.
@@ -91,12 +91,12 @@ their accumulator otherwise.
 
 ### `defvar` doesn't override an already-bound variable
 
-If you change a defvar default (e.g. `chrome-server-port` from `9129`
+If you change a defvar default (e.g. `browsel-port` from `9129`
 to `9130`), reloading the file in a running Emacs **doesn't** pick up
 the new default.  The variable is already bound; `defvar` is a no-op
 on bound symbols.
 
-Live-session fix: `(setq chrome-server-port 9130)` explicitly after
+Live-session fix: `(setq browsel-port 9130)` explicitly after
 the `load-file`.  On the next Emacs restart, `defvar` takes the new
 default cleanly from the fresh load.
 
@@ -116,7 +116,7 @@ of any file using `lexical-binding: t`.  This tells the byte-compiler
 to treat the symbol as special.
 
 Same trick for `org-capture-templates`.  Both are in
-`chrome-server.el` and `chrome-server-youtube.el`.
+`browsel.el` and `browsel-youtube.el`.
 
 ## YouTube specifically
 
@@ -165,7 +165,7 @@ This is the canonical way to get the current video's player response.
 ### Per-tab consent for `EVAL_IN_ACTIVE_TAB` interacts with the request timeout
 
 The consent overlay (in `extension/src/consent.js`) allows 30s for the
-user to click.  `chrome-server-request-timeout` is 10s (was 5s).  If
+user to click.  `browsel-request-timeout` is 10s (was 5s).  If
 the user is in another window and doesn't see the prompt for >10s,
 Emacs times out — but the eval still executes when they eventually
 click Allow, with no caller to receive the result.

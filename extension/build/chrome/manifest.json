@@ -1,7 +1,7 @@
 {
-  "name": "Chrome Server (Emacs bridge)",
-  "version": "0.72",
-  "description": "Bidirectional WebSocket bridge between Chrome and a running Emacs instance.",
+  "name": "Browsel (Emacs bridge)",
+  "version": "0.8",
+  "description": "Bidirectional WebSocket bridge between a WebExtension (Chrome or Firefox) and a running Emacs instance.",
   "options_ui": {
     "page": "html/options.html",
     "open_in_tab": true
@@ -34,7 +34,7 @@
   },
   "action": {
     "default_popup": "html/popup.html",
-    "default_title": "Chrome Server",
+    "default_title": "Browsel",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",

@@ -11,7 +11,14 @@
       padding: 12px;
       margin: 0;
     }
-    h1 { font-size: 13px; margin: 0 0 8px; }
+    h1 { font-size: 13px; margin: 0; }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .header .logo { width: 32px; height: 32px; }
     .status-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
     .dot { width: 10px; height: 10px; border-radius: 50%; background: #999; }
     .dot.connected    { background: #4a4; }
@@ -128,7 +135,10 @@
   </style>
 </head>
 <body>
-  <h1>Chrome Server</h1>
+  <div class="header">
+    <h1>Browsel</h1>
+    <img id="logo" class="logo" src="../icons/icon128.png" alt="">
+  </div>
 
   <div class="status-row">
     <div id="dot" class="dot disconnected"></div>

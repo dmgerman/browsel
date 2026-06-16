@@ -1,7 +1,11 @@
-#+title: chrome-server
+#+title: browsel
 #+author: Daniel M. German
 
-=chrome-server= is a module that allows Emacs and Chrome to
+#+attr_org: :width 240
+#+attr_html: :width 240 :align center
+[[file:doc/browsel-logo.png]]
+
+=browsel= is a module that allows Emacs and Chrome to
 communicate with each other, in both directions.  Right-click on a
 page in the Web browser (Chrome or Firefox) and have it sent to Emacs (org-capture, save-page,
 archive a ChatGPT conversation, save a YouTube video for later).
@@ -9,7 +13,7 @@ Going the other way: from Emacs query browser state (what tabs are
 open?  what's the page title?  what's the video's current time?) and
 act on it.
 
-=chrome-server= is composed of two parts:
+=browsel= is composed of two parts:
 
 1. *An Emacs side*.  A WebSocket server on =127.0.0.1:9130= that
    registers handlers for actions initiated from the browser, plus
@@ -29,9 +33,9 @@ Connecting and back.  Setup for each side is below.
 Security has been a major concern in the design of this module. Please see [[*Security][Security]] below
 for more information.
 
-=chrome-server= was inspired by [[https://github.com/bitspook/spookfox][spookfox]], a similar Emacs/Firefox
+=browsel= was inspired by [[https://github.com/bitspook/spookfox][spookfox]], a similar Emacs/Firefox
 integration.  The protocol and handler-registry pattern are adapted
-from it.  =chrome-server= started on Chrome and now ships a Firefox
+from it.  =browsel= started on Chrome and now ships a Firefox
 build as well.  Its other major enhancement is that it provides
 two-way communication: Emacs can invoke browser handlers, and the
 browser can invoke Emacs handlers.
@@ -45,19 +49,19 @@ The full setup is documented in the *Setup* section below; this is
 the short form.
 
 1. *Configure and start the Emacs side.*  Add a =use-package= form to
-   your Emacs configuration that loads =chrome-server=, requires the
+   your Emacs configuration that loads =browsel=, requires the
    optional backends for the features you want, and starts the
    WebSocket server:
 
    #+begin_src emacs-lisp
-   (use-package chrome-server
-     :load-path "/path/to/chrome-server"
+   (use-package browsel
+     :load-path "/path/to/browsel"
      :config
-     (require 'chrome-server-www)      ; SAVE_PAGE
-     (require 'chrome-server-chatgpt)  ; CHATGPT
-     (require 'chrome-server-youtube)  ; YOUTUBE + YOUTUBE_TRANSCRIPT
-     (require 'chrome-server-babel)    ; org-babel chrome-js blocks
-     (chrome-server-start))
+     (require 'browsel-www)      ; SAVE_PAGE
+     (require 'browsel-chatgpt)  ; CHATGPT
+     (require 'browsel-youtube)  ; YOUTUBE + YOUTUBE_TRANSCRIPT
+     (require 'browsel-babel)    ; org-babel browsel-js blocks
+     (browsel-start))
    #+end_src
 
    Comment out any =require= for a feature you do not want.
@@ -97,7 +101,7 @@ does not, click *Reconnect*.
 
 ** In Emacs
 
-- Org-Babel =chrome-js= source blocks that run JavaScript in the
+- Org-Babel =browsel-js= source blocks that run JavaScript in the
   active tab and return the value into the org buffer.
 - An elisp API to query and control the browser: list tabs, focus,
   open, close, evaluate JS with a return value.
@@ -105,7 +109,7 @@ does not, click *Reconnect*.
 ** Extensibility
 
 - A new action is a single =config.json= edit plus =make build=; no
-  Chrome extension code change is required.
+  browser extension code change is required.
 
 * Right-click menu actions
 
@@ -146,7 +150,7 @@ a response counts as deny.
 
 * The popup
 
-#+caption: The Chrome extension popup
+#+caption: The browser extension popup
 #+attr_org: :width 280
 #+attr_html: :width 280
 [[file:doc/popup.png]]
@@ -163,20 +167,20 @@ a response counts as deny.
 
 * Run JavaScript in any tab from Emacs
 
-** =chrome-server-request=
+** =browsel-request=
 
-=chrome-server-request= is the elisp function that sends a request to
-the Chrome extension and returns its response.  It is the function
+=browsel-request= is the elisp function that sends a request to
+the browser extension and returns its response.  It is the function
 you call whenever you want Emacs to invoke a handler in the Chrome
 extension — including running JavaScript in a tab.  The call is
-synchronous: it blocks until the Chrome extension replies, or until
-=chrome-server-request-timeout= (10 seconds by default) elapses,
+synchronous: it blocks until the browser extension replies, or until
+=browsel-request-timeout= (10 seconds by default) elapses,
 whichever happens first.
 
 Its signature is:
 
 #+begin_src emacs-lisp
-(chrome-server-request NAME &optional PAYLOAD CLIENT)
+(browsel-request NAME &optional PAYLOAD CLIENT)
 #+end_src
 
 =NAME= is a string identifying the handler — for example
@@ -192,7 +196,7 @@ more than one is connected, supply =CLIENT= to pick which browser
 runs the request; the function signals an error if =CLIENT= names a
 browser that is not currently connected, and also signals an error
 if more than one browser is connected and =CLIENT= is omitted.  Use
-=chrome-server-connected-clients= to inspect the current roster.
+=browsel-connected-clients= to inspect the current roster.
 
 The function returns a plist with two fields you should always check.
 =:status= is the string ="ok"= when the request succeeded and
@@ -235,24 +239,24 @@ calls made from inside another WebSocket callback), use the
 asynchronous variant:
 
 #+begin_src emacs-lisp
-(chrome-server-request-async NAME PAYLOAD CALLBACK &optional CLIENT)
+(browsel-request-async NAME PAYLOAD CALLBACK &optional CLIENT)
 #+end_src
 
 It returns the request id immediately and invokes =CALLBACK= with the
-response plist once the Chrome extension replies.  Unlike the
+response plist once the browser extension replies.  Unlike the
 synchronous form, it is safe to use from any context.  =CLIENT= has
-the same meaning as in =chrome-server-request=.
+the same meaning as in =browsel-request=.
 
 ** Minimal example
 
 #+begin_src emacs-lisp
-(chrome-server-request "EVAL_IN_ACTIVE_TAB"
+(browsel-request "EVAL_IN_ACTIVE_TAB"
                        '(:code "document.querySelector('video').currentTime"))
 ;; => (:status "ok"
 ;;     :result ((:documentId "..." :frameId 0 :result 60.34)))
 #+end_src
 
-The first request to a fresh tab causes the Chrome extension to
+The first request to a fresh tab causes the browser extension to
 display the consent overlay; subsequent calls to the same tab go
 through silently until consent is revoked or the tab is closed.
 
@@ -261,17 +265,17 @@ JavaScript expression, not the surrounding response envelope.  The
 pattern for extracting it from a single-frame result is:
 
 #+begin_src emacs-lisp
-(let ((r (chrome-server-request "EVAL_IN_ACTIVE_TAB"
+(let ((r (browsel-request "EVAL_IN_ACTIVE_TAB"
                                 '(:code "document.title"))))
   (plist-get (car (plist-get r :result)) :result))
 ;; => "Subscriptions - YouTube"
 #+end_src
 
-** =chrome-js= source blocks
+** =browsel-js= source blocks
 
-For one-off JavaScript snippets, writing out a =chrome-server-request=
-call by hand is more typing than necessary.  The =chrome-server-babel=
-module provides =org-babel-execute:chrome-js=, which wraps the function
+For one-off JavaScript snippets, writing out a =browsel-request=
+call by hand is more typing than necessary.  The =browsel-babel=
+module provides =org-babel-execute:browsel-js=, which wraps the function
 behind an org-mode source block: the body of the block becomes the
 =:code= payload, and the value of the last JavaScript expression is
 returned as the block's result.  Babel handles the response
@@ -299,7 +303,7 @@ specifies it will fail on Firefox MV2.
 be properly rendered inside the browser)
 
 #+begin_example
-# +begin_src chrome-js
+# +begin_src browsel-js
 document.querySelector('video').currentTime
 # +end_src
 #+end_example
@@ -308,7 +312,7 @@ document.querySelector('video').currentTime
 *Pause playback and report the new state:*
 
 #+begin_example
-# +begin_src chrome-js
+# +begin_src browsel-js
 const v = document.querySelector('video');
 v.pause();
 ({ paused: v.paused, at: v.currentTime })
@@ -318,7 +322,7 @@ v.pause();
 *Collect several page properties into one object:*
 
 #+begin_example
-# +begin_src chrome-js
+# +begin_src browsel-js
 ({ url: location.href,
    title: document.title,
    selection: getSelection().toString(),
@@ -330,7 +334,7 @@ v.pause();
 backend awaits the returned promise):
 
 #+begin_example
-# +begin_src chrome-js
+# +begin_src browsel-js
 (async () => {
   const r = await fetch(location.href);
   return { status: r.status, length: (await r.text()).length };
@@ -341,7 +345,7 @@ backend awaits the returned promise):
 *Run in a specific tab instead of the active one:*
 
 #+begin_example
-# +begin_src chrome-js :tab-id 1234567890
+# +begin_src browsel-js :tab-id 1234567890
 document.title
 # +end_src
 #+end_example
@@ -349,7 +353,7 @@ document.title
 *Return every frame's result (for pages with cross-origin iframes):*
 
 #+begin_example
-# +begin_src chrome-js :frames all
+# +begin_src browsel-js :frames all
 location.origin
 # +end_src
 #+end_example
@@ -357,7 +361,7 @@ location.origin
 *Pick a browser when more than one is connected:*
 
 #+begin_example
-# +begin_src chrome-js :client firefox
+# +begin_src browsel-js :client firefox
 navigator.userAgent
 # +end_src
 #+end_example
@@ -370,8 +374,8 @@ omitting =:client= signals an error and lists the connected names.
 
 * Querying and controlling the browser from Emacs
 
-The same =chrome-server-request= function used for JavaScript
-evaluation also invokes the other handlers the Chrome extension
+The same =browsel-request= function used for JavaScript
+evaluation also invokes the other handlers the browser extension
 exposes.  The built-in handler names cover the operations Emacs is
 most likely to need: =GET_ALL_TABS= returns the current tab list,
 =GET_ACTIVE_TAB= returns just the focused tabs of each window,
@@ -382,13 +386,13 @@ keys and response shape are documented in =CONTRIBUTING.org=.
 #+begin_src emacs-lisp
 ;; List every open tab as title/url pairs
 (mapcar (lambda (tab) (cons (plist-get tab :title) (plist-get tab :url)))
-        (chrome-server-request "GET_ALL_TABS" nil))
+        (browsel-request "GET_ALL_TABS" nil))
 
 ;; Switch to a tab by id (and focus its window if it is in another window)
-(chrome-server-request "FOCUS_TAB" '(:id 1234 :focusWindow t))
+(browsel-request "FOCUS_TAB" '(:id 1234 :focusWindow t))
 
 ;; Open a new tab
-(chrome-server-request "OPEN_TAB" '(:url "https://example.com"))
+(browsel-request "OPEN_TAB" '(:url "https://example.com"))
 #+end_src
 
 * Setup
@@ -401,7 +405,7 @@ Core (always needed):
 - Chrome or Chromium.
 
 Per-feature.  Each row is needed *only* if you invoke that feature;
-the rest of =chrome-server= keeps working without it.
+the rest of =browsel= keeps working without it.
 
 | Feature                            | Needed                            | What "missing" looks like                                  |
 |------------------------------------+-----------------------------------+-------------------------------------------------------------|
@@ -411,20 +415,20 @@ the rest of =chrome-server= keeps working without it.
 | Rich =YOUTUBE= metadata            | YouTube Data API v3 key           | Capture still works, but without title/duration/description |
 | Optional Emacs-side modules        | corresponding =(require …)= in the use-package =:config= | Their handlers aren't registered; that name returns "Unknown request" |
 
-If you don't load a module (e.g. don't =(require 'chrome-server-youtube)=),
+If you don't load a module (e.g. don't =(require 'browsel-youtube)=),
 none of its external dependencies are needed.
 
 ** Emacs
 
 The elisp files are intended for distribution through MELPA (recipe
 in the =melpa/= subdirectory of this repository).  Once accepted,
-=M-x package-install RET chrome-server RET= will install the core
-=chrome-server.el= along with =chrome-server-www=,
-=chrome-server-chatgpt=, =chrome-server-youtube=, and
-=chrome-server-babel=.  Until then, clone the repository and point
+=M-x package-install RET browsel RET= will install the core
+=browsel.el= along with =browsel-www=,
+=browsel-chatgpt=, =browsel-youtube=, and
+=browsel-babel=.  Until then, clone the repository and point
 =:load-path= at it.
 
-The Chrome extension under =extension/= is not distributed through
+The browser extension under =extension/= is not distributed through
 MELPA; it must be loaded into Chrome separately (see *Chrome
 extension* below).  Installing only the elisp side will start the
 WebSocket server but the popup status will remain Disconnected until
@@ -436,39 +440,39 @@ feature; comment out any you do not want loaded:
 #+begin_src emacs-lisp
 (use-package websocket :ensure t)
 
-(use-package chrome-server
+(use-package browsel
   ;; :ensure t after the MELPA recipe is accepted; until then
-  ;; :load-path "/path/to/chrome-server"
+  ;; :load-path "/path/to/browsel"
   :after websocket
   :config
-  (require 'chrome-server-www)      ; SAVE_PAGE        (web archive)
-  (require 'chrome-server-chatgpt)  ; CHATGPT          (save conversation)
-  (require 'chrome-server-youtube)  ; YOUTUBE + YOUTUBE_TRANSCRIPT
-  (require 'chrome-server-babel)    ; org-babel chrome-js blocks
-  (chrome-server-start))
+  (require 'browsel-www)      ; SAVE_PAGE        (web archive)
+  (require 'browsel-chatgpt)  ; CHATGPT          (save conversation)
+  (require 'browsel-youtube)  ; YOUTUBE + YOUTUBE_TRANSCRIPT
+  (require 'browsel-babel)    ; org-babel browsel-js blocks
+  (browsel-start))
 #+end_src
 
-=chrome-server.el= itself registers the three baseline handlers
+=browsel.el= itself registers the three baseline handlers
 (=ORG_CAPTURE=, =ORG_ROAM_CAPTURE=, =EWW=), which is sufficient for a
 minimal installation.  The =require= lines load the additional
 backends only when their actions are needed.
 
-The server binds =127.0.0.1:9130=.  =(chrome-server-stop)= /
-=(chrome-server-start)= start and stop it explicitly.  =(setq
-chrome-server-debug t)= logs every WebSocket frame to the
-=*chrome-server*= buffer for protocol debugging.
+The server binds =127.0.0.1:9130=.  =(browsel-stop)= /
+=(browsel-start)= start and stop it explicitly.  =(setq
+browsel-debug t)= logs every WebSocket frame to the
+=*browsel*= buffer for protocol debugging.
 
 Configuration variables for paths, output locations, and credentials
 (full list in =CONTRIBUTING.org=):
 
 | Variable                                | Purpose                                       |
 |-----------------------------------------+-----------------------------------------------|
-| =chrome-server-www-archive-dir=         | where save-page writes archived pages         |
-| =chrome-server-chatgpt-dir=             | where save-chatgpt writes conversations       |
-| =chrome-server-youtube-videos-file=     | org file the YouTube capture appends to       |
-| =chrome-server-youtube-transcript-dir=  | where transcripts are written                 |
-| =chrome-server-youtube-api-key=         | YouTube Data API v3 key (for video metadata)  |
-| =chrome-server-org-capture-key=         | org-capture template key for browser captures |
+| =browsel-www-archive-dir=         | where save-page writes archived pages         |
+| =browsel-chatgpt-dir=             | where save-chatgpt writes conversations       |
+| =browsel-youtube-videos-file=     | org file the YouTube capture appends to       |
+| =browsel-youtube-transcript-dir=  | where transcripts are written                 |
+| =browsel-youtube-api-key=         | YouTube Data API v3 key (for video metadata)  |
+| =browsel-org-capture-key=         | org-capture template key for browser captures |
 
 The full list is in =CONTRIBUTING.org=.
 
@@ -483,16 +487,16 @@ In Chrome:
 1. Turn on Developer mode (top right of =chrome://extensions=).
 2. Click "Load unpacked" and select =extension/build/chrome/=.
 3. Click Details → toggle *Allow User Scripts* on (only needed if you
-   want =EVAL_IN_ACTIVE_TAB= / =chrome-js= blocks to work).
+   want =EVAL_IN_ACTIVE_TAB= / =browsel-js= blocks to work).
 
 The popup should turn green within a few seconds.  If not, click
 *Reconnect*.
 
 If the popup shows *Version mismatch — rebuild and reload* in red
 and a ={!}= badge appears on the toolbar icon, the extension and the
-Emacs side disagree on the chrome-server version.  Rebuild the
+Emacs side disagree on the browsel version.  Rebuild the
 extension (=make= in =extension/=), reload the extension card in
-=chrome://extensions=, and confirm =M-x chrome-server-version=
+=chrome://extensions=, and confirm =M-x browsel-version=
 reports the same string as the version shown at the bottom of the
 options page.  The protocol is pre-1.0 and the check is strict to
 catch silent skew before it causes confusing failures.
@@ -534,7 +538,7 @@ through the =CLIENT= argument as described above.
 
 *What differs:*
 
-- =EVAL_IN_ACTIVE_TAB= and =chrome-js= source blocks run in the
+- =EVAL_IN_ACTIVE_TAB= and =browsel-js= source blocks run in the
   content-script isolated world.  The portable ="USER_SCRIPT"=
   default works on both browsers; passing =:world "MAIN"= is Chrome
   only and a block that needs MAIN will surface a clear error on
@@ -545,7 +549,7 @@ through the =CLIENT= argument as described above.
 ** Customising
 
 Most things are reachable from the popup → Options page (or
-=chrome://extensions= → Chrome Server → Extension options):
+=chrome://extensions= → Browsel → Extension options):
 
 - *Raise Emacs* — a checkbox per action.  When checked, Emacs is
   brought to the foreground after that action completes.  Stored in
@@ -561,7 +565,7 @@ Larger changes (new menus, new content scripts, etc.) are made in
 
 Running an unpacked Chrome extension requires *Developer mode* to be
 enabled in =chrome://extensions=.  This is a Chrome-level requirement,
-not a =chrome-server= feature.  With Developer mode off the extension
+not a =browsel= feature.  With Developer mode off the extension
 does not run, no WebSocket is opened, and none of the features below
 are available.
 
@@ -591,17 +595,17 @@ place in your editor.  No additional Chrome permissions are required.
 
 ** Evaluating JavaScript in tabs
 
-=EVAL_IN_ACTIVE_TAB= and the =chrome-js= source blocks run arbitrary
+=EVAL_IN_ACTIVE_TAB= and the =browsel-js= source blocks run arbitrary
 JavaScript inside a tab, which can read the DOM, cookies,
 =localStorage=, and any in-page state.  Two protections cover this
 capability:
 
 1. The Chrome-level toggle *Allow User Scripts* (=chrome://extensions=
-   → Chrome Server → Details).  When this is off, =EVAL_IN_ACTIVE_TAB=
+   → Browsel → Details).  When this is off, =EVAL_IN_ACTIVE_TAB=
    fails with a clear error; every other feature continues to work.
    Leave it off if JavaScript evaluation is not a capability you need.
 
-2. When *Allow User Scripts* is on, =chrome-server= still requires
+2. When *Allow User Scripts* is on, =browsel= still requires
    per-tab consent before any script runs.  The first
    =EVAL_IN_ACTIVE_TAB= request to a tab displays an in-page overlay
    showing the code about to run, with four buttons: *Deny*, *Allow
@@ -621,7 +625,7 @@ The Emacs side binds the WebSocket server to =127.0.0.1= explicitly,
 not to all interfaces.  The kernel rejects any connection that does
 not originate from the loopback interface, so a process on a different
 machine cannot connect even when reachable on the same LAN.  The
-Chrome extension is similarly unreachable: extensions do not accept
+browser extension is similarly unreachable: extensions do not accept
 network connections at all; they only initiate outbound ones.
 
 Local processes are a different matter.  The WebSocket has no
@@ -638,11 +642,11 @@ For the deeper threat model and what is /not/ protected, see
 
 | Symptom                                   | First thing to try                                                            |
 |-------------------------------------------+-------------------------------------------------------------------------------|
-| Popup shows Disconnected                  | Click Reconnect.  If still red: reload the Chrome extension card in =chrome://extensions=.  If still red: =M-x chrome-server-start=. |
-| =EVAL_IN_ACTIVE_TAB= errors                | Toggle *Allow User Scripts* on in the Chrome extension's Details.             |
+| Popup shows Disconnected                  | Click Reconnect.  If still red: reload the browser extension card (Chrome: =chrome://extensions=; Firefox: =about:debugging=).  If still red: =M-x browsel-start=. |
+| =EVAL_IN_ACTIVE_TAB= errors                | On Chrome: toggle *Allow User Scripts* on in the extension's Details.  On Firefox MV2: only =:world "USER_SCRIPT"= is supported; =:world "MAIN"= is rejected. |
 | Consent overlay never appears             | =chrome://=, =chrome-extension://=, and the Web Store refuse eval — Chrome policy. |
-| "no client connected" from elisp          | Chrome extension isn't connected.  Check the popup; reload if needed.         |
-| =chrome-server-start= says "address in use" | Another process is already on 9130.  =lsof -nP -iTCP:9130 -sTCP:LISTEN= to see which. |
+| "no client connected" from elisp          | browser extension isn't connected.  Check the popup; reload if needed.         |
+| =browsel-start= says "address in use" | Another process is already on 9130.  =lsof -nP -iTCP:9130 -sTCP:LISTEN= to see which. |
 | Save-page produces no notification        | Check =*Messages*=; the handler logs success/failure there.                    |
 
 * License

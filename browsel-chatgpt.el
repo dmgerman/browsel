@@ -1,12 +1,12 @@
-;;; chrome-server-chatgpt.el --- ChatGPT backend for chrome-server  -*- lexical-binding: t; -*-
+;;; browsel-chatgpt.el --- ChatGPT backend for browsel  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Daniel M. German <dmg@turingmachine.org>
 
 ;; Author: Daniel M. German <dmg@turingmachine.org>
 ;; Maintainer: Daniel M. German <dmg@turingmachine.org>
 ;; Keywords: comm, tools, browser, org
-;; URL: https://github.com/dmgerman/chrome-server
-;; Package-Requires: ((emacs "27.1") (chrome-server "0.72"))
+;; URL: https://github.com/dmgerman/browsel
+;; Package-Requires: ((emacs "27.1") (browsel "0.8"))
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;;
@@ -25,7 +25,7 @@
 
 ;;; Commentary:
 
-;; ChatGPT-specific backend for chrome-server.  Registers the CHATGPT
+;; ChatGPT-specific backend for browsel.  Registers the CHATGPT
 ;; WebSocket request handler, which saves a full ChatGPT conversation to
 ;; ~/sync/chatgpt/<basename>/ as an org file, converting HTML turns via
 ;; pandoc.  Embedded images are extracted to the same directory.
@@ -37,17 +37,17 @@
 
 ;;; Code:
 
-(require 'chrome-server)
+(require 'browsel)
 
 ;; ── Configuration ────────────────────────────────────────────────────────────
 
-(defvar chrome-server-chatgpt-dir "~/sync/chatgpt"
+(defvar browsel-chatgpt-dir "~/sync/chatgpt"
   "Directory where ChatGPT conversation org files are saved.")
-;; chrome-server-pandoc-executable is defined in chrome-server.el (shared with -www).
+;; browsel-pandoc-executable is defined in browsel.el (shared with -www).
 
 ;; ── HTML → Org conversion ─────────────────────────────────────────────────────
 
-(defun chrome-server-chatgpt--min-heading-level (html)
+(defun browsel-chatgpt--min-heading-level (html)
   "Return the smallest HTML heading level (1-6) found in HTML, or nil if none."
   (let ((case-fold-search t))
     (with-temp-buffer
@@ -60,19 +60,19 @@
               (setq min-level lvl))))
         min-level))))
 
-(defun chrome-server-chatgpt--html-to-org (html media-dir)
+(defun browsel-chatgpt--html-to-org (html media-dir)
   "Convert HTML string to org format via pandoc.
 Images are extracted to MEDIA-DIR via pandoc's --extract-media flag.
 Headings are shifted so the topmost heading in HTML becomes org level 3,
 keeping pandoc output nested under the surrounding level-2 turn heading.
 Signals an error if pandoc is not found or exits non-zero."
-  (unless (executable-find chrome-server-pandoc-executable)
-    (error "Pandoc not found (set chrome-server-pandoc-executable)"))
+  (unless (executable-find browsel-pandoc-executable)
+    (error "Pandoc not found (set browsel-pandoc-executable)"))
   (with-temp-buffer
-    (let* ((min-lvl (chrome-server-chatgpt--min-heading-level html))
+    (let* ((min-lvl (browsel-chatgpt--min-heading-level html))
            (shift   (if min-lvl (- 3 min-lvl) 0))
-           (exit-code (call-process-region (chrome-server--strip-svg html) nil
-                                          chrome-server-pandoc-executable
+           (exit-code (call-process-region (browsel--strip-svg html) nil
+                                          browsel-pandoc-executable
                                           nil t nil
                                           "-f" "html" "-t" "org"
                                           "--wrap=none"
@@ -95,38 +95,38 @@ Signals an error if pandoc is not found or exits non-zero."
 
 ;; ── Handler ──────────────────────────────────────────────────────────────────
 
-(defun chrome-server-chatgpt--handle-chatgpt (payload)
+(defun browsel-chatgpt--handle-chatgpt (payload)
   "Handle CHATGPT request with PAYLOAD.
 Honours :raise after the conversation has been written to disk."
-  (chrome-server--require-payload payload)
-  (let ((file (chrome-server-chatgpt--save payload)))
-    (chrome-server--maybe-raise payload)
-    (chrome-server--ok (format "Saved to %s" file))))
+  (browsel--require-payload payload)
+  (let ((file (browsel-chatgpt--save payload)))
+    (browsel--maybe-raise payload)
+    (browsel--ok (format "Saved to %s" file))))
 
 ;; ── Conversation saving ───────────────────────────────────────────────────────
 
-(defun chrome-server-chatgpt--id (url)
+(defun browsel-chatgpt--id (url)
   "Extract the conversation ID from a ChatGPT URL, or nil if not found.
 Handles both direct conversations (chatgpt.com/c/<id>) and project
 conversations (chatgpt.com/g/<project>/c/<id>)."
   (when (string-match "chatgpt\\.com/\\(?:g/[^/?#]+/\\)?c/\\([^/?#]+\\)" url)
     (match-string 1 url)))
 
-(defun chrome-server-chatgpt--sanitize-title (title)
+(defun browsel-chatgpt--sanitize-title (title)
   "Sanitize TITLE for use as a filename component (max 40 chars)."
   (let* ((s (downcase title))
          (s (replace-regexp-in-string "[^a-z0-9]+" "-" s))
          (s (replace-regexp-in-string "^-+\\|-+$" "" s)))
     (truncate-string-to-width s 40)))
 
-(defun chrome-server-chatgpt--find-existing-dir (root id)
+(defun browsel-chatgpt--find-existing-dir (root id)
   "Return the full path of an existing conversation directory for ID under ROOT.
 Returns nil when ID is \"unknown\" (to avoid false matches) or when not found."
   (unless (string= id "unknown")
     (car (seq-filter #'file-directory-p
                      (file-expand-wildcards (format "%s/*-%s-*" root id))))))
 
-(defun chrome-server-chatgpt--format-turn (turn conv-dir)
+(defun browsel-chatgpt--format-turn (turn conv-dir)
   "Format a conversation TURN as org text.
 User turns: ** heading from first line, remaining lines as body.
   If the first line exceeds 100 characters the heading is truncated with
@@ -139,9 +139,9 @@ Converts :html via pandoc (extracting images to CONV-DIR); falls back to :text."
          (body (string-trim
                 (if (and html (not (string-empty-p html)))
                     (condition-case err
-                        (chrome-server-chatgpt--html-to-org html conv-dir)
+                        (browsel-chatgpt--html-to-org html conv-dir)
                       (error
-                       (chrome-server--warn "HTML conversion failed, using plain text: %s"
+                       (browsel--warn "HTML conversion failed, using plain text: %s"
                                             (error-message-string err))
                        (or raw "")))
                   (or raw "")))))
@@ -160,7 +160,7 @@ Converts :html via pandoc (extracting images to CONV-DIR); falls back to :text."
             (format "** %s\n\n" heading)))
       (format "%s\n\n" body))))
 
-(defun chrome-server-chatgpt--save-html (turns file)
+(defun browsel-chatgpt--save-html (turns file)
   "Save raw HTML of TURNS to FILE as a minimal HTML document."
   (with-temp-file file
     (insert "<!DOCTYPE html>\n<html><body>\n")
@@ -171,7 +171,7 @@ Converts :html via pandoc (extracting images to CONV-DIR); falls back to :text."
                         role (or html "")))))
     (insert "</body></html>\n")))
 
-(defun chrome-server-chatgpt--save (payload)
+(defun browsel-chatgpt--save (payload)
   "Save ChatGPT conversation PAYLOAD to a per-item directory.
 Refreshes the directory if a conversation with the same id already
 exists.  Each conversation lives in <root>/<basename>/<basename>.{org,html}
@@ -179,17 +179,17 @@ plus any extracted images.  Returns the path of the org file written."
   (let* ((url   (plist-get payload :url))
          (title (or (plist-get payload :title) "chatgpt-conversation"))
          (turns (plist-get payload :turns))
-         (id    (or (chrome-server-chatgpt--id url)
+         (id    (or (browsel-chatgpt--id url)
                     (progn
                       (message "Could not extract ID from URL: %s" url)
                       "unknown")))
-         (root  (expand-file-name chrome-server-chatgpt-dir))
-         (conv-dir (or (chrome-server-chatgpt--find-existing-dir root id)
+         (root  (expand-file-name browsel-chatgpt-dir))
+         (conv-dir (or (browsel-chatgpt--find-existing-dir root id)
                        (expand-file-name
                         (format "%s-%s-%s"
                                 (format-time-string "%Y%m%d-%H%M%S")
                                 id
-                                (chrome-server-chatgpt--sanitize-title title))
+                                (browsel-chatgpt--sanitize-title title))
                         root)))
          (basename  (file-name-nondirectory conv-dir))
          (file      (expand-file-name (concat basename ".org")  conv-dir))
@@ -202,9 +202,9 @@ plus any extracted images.  Returns the path of the org file written."
     (unless turns
       (error "Payload contains no 'turns'"))
     (condition-case err
-        (chrome-server-chatgpt--save-html turns html-file)
+        (browsel-chatgpt--save-html turns html-file)
       (error
-       (chrome-server--warn "could not save HTML file %s: %s"
+       (browsel--warn "could not save HTML file %s: %s"
                             html-file (error-message-string err))))
     (condition-case err
         (with-temp-file file
@@ -215,7 +215,7 @@ plus any extracted images.  Returns the path of the org file written."
           (insert (format "[[%s][Open in ChatGPT]]\n\n" url))
           (insert (format "* %s\n\n" title))
           (dolist (turn turns)
-            (insert (chrome-server-chatgpt--format-turn turn conv-dir))))
+            (insert (browsel-chatgpt--format-turn turn conv-dir))))
       (error
        (error "Could not write org file %s: %s"
               file (error-message-string err))))
@@ -223,8 +223,8 @@ plus any extracted images.  Returns the path of the org file written."
 
 ;; ── Register handler ─────────────────────────────────────────────────────────
 
-(chrome-server-register-handler "CHATGPT" #'chrome-server-chatgpt--handle-chatgpt)
+(browsel-register-handler "CHATGPT" #'browsel-chatgpt--handle-chatgpt)
 
-(provide 'chrome-server-chatgpt)
+(provide 'browsel-chatgpt)
 
-;;; chrome-server-chatgpt.el ends here
+;;; browsel-chatgpt.el ends here

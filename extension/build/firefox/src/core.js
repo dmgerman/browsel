@@ -94,7 +94,7 @@ function notify(message) {
   api.notifications.create({
     type: "basic",
     iconUrl: api.runtime.getURL("icons/icon48.png"),
-    title: "Chrome Server",
+    title: "Browsel",
     message,
   });
 }
@@ -464,6 +464,6 @@ export async function initRouter(transport) {
     await refreshAllTabIcons();
   } catch (e) {
     log("boot failed:", e);
-    notify(`Chrome Server boot failed: ${e?.message ?? e}`);
+    notify(`Browsel boot failed: ${e?.message ?? e}`);
   }
 }
