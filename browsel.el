@@ -67,11 +67,13 @@
 ;; Without the defvar declarations a `let' on `org-capture-initial' would be
 ;; treated as a lexical binding and `org-capture' would never see the value.
 (defvar org-capture-initial)
+(defvar org-store-link-plist)
+(defvar org-capture-link-is-already-stored)
 (declare-function org-capture          "org-capture" (&optional goto keys))
 (declare-function org-roam-capture-    "org-roam"    (&rest args))
 (declare-function org-roam-node-create "org-roam"    (&rest args))
 
-(defconst browsel-version "0.85"
+(defconst browsel-version "0.87"
   "Current version of the browsel package.")
 
 ;;;###autoload
@@ -623,6 +625,18 @@ Returns an empty string if not set or already consumed."
     (concat (format "[[%s][%s]]" url title)
             (unless (string-empty-p text) (concat "\n\n" text)))))
 
+(defun browsel--store-link-plist (payload)
+  "Return an `org-store-link-plist' for PAYLOAD's url and title.
+Drives `%a' (annotation) expansion in org-capture templates so that
+each capture sees the current browser link rather than whatever link
+Emacs happened to store last.  `:annotation' is set explicitly because
+org-capture reads it directly when `org-capture-link-is-already-stored'
+is non-nil."
+  (let* ((url    (plist-get payload :url))
+         (title  (or (plist-get payload :title) "Web capture"))
+         (anno   (format "[[%s][%s]]" url title)))
+    (list :type "http" :link url :description title :annotation anno)))
+
 (defun browsel--require-payload (payload)
   "Signal if PAYLOAD is nil."
   (unless payload
@@ -680,7 +694,9 @@ Schedules the eww invocation and returns immediately
   "Open `org-capture' pre-filled from PAYLOAD.
 Uses `browsel-org-capture-key' if set, otherwise prompts interactively."
   (condition-case err
-      (let ((org-capture-initial (browsel--capture-initial payload)))
+      (let ((org-capture-initial              (browsel--capture-initial payload))
+            (org-store-link-plist             (browsel--store-link-plist payload))
+            (org-capture-link-is-already-stored t))
         (browsel--prime-payload-cache payload)
         (browsel--maybe-raise payload)
         (org-capture nil browsel-org-capture-key))
@@ -690,7 +706,9 @@ Uses `browsel-org-capture-key' if set, otherwise prompts interactively."
 (defun browsel--org-roam-capture (payload)
   "Open org-roam-capture, seeding the payload cache from PAYLOAD."
   (condition-case err
-      (let ((org-capture-initial (browsel--capture-initial payload)))
+      (let ((org-capture-initial              (browsel--capture-initial payload))
+            (org-store-link-plist             (browsel--store-link-plist payload))
+            (org-capture-link-is-already-stored t))
         (browsel--prime-payload-cache payload)
         (browsel--maybe-raise payload)
         (org-roam-capture-

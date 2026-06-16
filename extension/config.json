@@ -1,7 +1,7 @@
 {
   "extension": {
     "name": "Browsel (Emacs bridge)",
-    "version": "0.85",
+    "version": "0.87",
     "description": "Bidirectional WebSocket bridge between a WebExtension (Chrome or Firefox) and a running Emacs instance.",
 
     "options_ui": {
@@ -112,6 +112,32 @@
       }
     },
     {
+      "id":       "__org-capture-link",
+      "title":    "Emacs: org-capture this link",
+      "trigger":  "link",
+      "request":  "ORG_CAPTURE",
+      "payload":  "link-url",
+      "baseline": true,
+      "raise":    true,
+      "command":  {
+        "name":        "org-capture-link",
+        "description": "Org-capture the right-clicked link"
+      }
+    },
+    {
+      "id":       "__org-roam-capture-link",
+      "title":    "Emacs: org-roam-capture this link",
+      "trigger":  "link",
+      "request":  "ORG_ROAM_CAPTURE",
+      "payload":  "link-url",
+      "baseline": true,
+      "raise":    true,
+      "command":  {
+        "name":        "org-roam-capture-link",
+        "description": "Org-roam-capture the right-clicked link"
+      }
+    },
+    {
       "id":      "eww-page",
       "title":   "Emacs: open in eww",
       "trigger": ["page", "link"],
@@ -155,7 +181,7 @@
       "title":   "Emacs: add video for later",
       "trigger": ["page", "link"],
       "request": "YOUTUBE",
-      "payload": "url",
+      "payload": "url-only",
       "raise":   false,
       "documentUrlPatterns": [
         "https://www.youtube.com/*",
@@ -175,7 +201,7 @@
       "title":   "Emacs: save YouTube transcript",
       "trigger": ["page", "link"],
       "request": "YOUTUBE_TRANSCRIPT",
-      "payload": "url",
+      "payload": "url-only",
       "raise":   false,
       "documentUrlPatterns": [
         "https://www.youtube.com/*",

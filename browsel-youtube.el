@@ -167,12 +167,36 @@ Returns empty string if DURATION is nil or empty."
 
 ;; ── Org entry builder ─────────────────────────────────────────────────────────
 
+(defun browsel-youtube--escape-template (s)
+  "Escape S so org-capture-fill-template treats every char as literal.
+A `%' followed by certain letters (or by `(') is a template directive;
+URL-encoded text from a YouTube description can hold such sequences
+(e.g. `%A6' = ellipsis), and org-capture would otherwise interpret
+them — prompting for a Link description, splicing in `org-store-link'
+output, evaluating sexps, etc.  org-capture's own escape syntax is
+`\\\\' before `%', so double backslashes first, then prepend one
+backslash to every `%'."
+  (replace-regexp-in-string "%" "\\\\%"
+   (replace-regexp-in-string "\\\\" "\\\\\\\\" s)))
+
+(defun browsel-youtube--resolve-title (title oembed api-info)
+  "Return the most authoritative title available for the video.
+Priority: non-empty TITLE, OEMBED \"title\", API-INFO snippet \"title\",
+and finally the empty string."
+  (cond
+   ((and (stringp title) (not (string-empty-p title))) title)
+   ((and oembed (gethash "title" oembed))
+    (gethash "title" oembed))
+   ((and api-info (gethash "snippet" api-info)
+         (gethash "title" (gethash "snippet" api-info)))
+    (gethash "title" (gethash "snippet" api-info)))
+   (t "")))
+
 (defun browsel-youtube--build-entry (url title selection oembed api-info video-id)
   "Build and return an org capture entry string for a YouTube video.
 URL, TITLE, SELECTION, and VIDEO-ID identify and seed the entry.
 OEMBED and API-INFO may be nil if the respective fetch failed."
-  (let* ((title       (if (and (string= title url) oembed (gethash "title" oembed))
-                          (gethash "title" oembed) title))
+  (let* ((title       (browsel-youtube--resolve-title title oembed api-info))
          (title-clean (replace-regexp-in-string "|" ":" title t t))
          (ytline      (if video-id (format "[[yt:%s]]\n" video-id) ""))
          (snippet     (and api-info (gethash "snippet"        api-info)))
@@ -259,8 +283,9 @@ Fetches metadata from oEmbed and the YouTube Data API, then runs
                         (browsel--warn "oEmbed fetch failed (continuing without): %s"
                                              (error-message-string err))
                         nil)))
-         (entry-text (browsel-youtube--build-entry
-                      url title selection oembed api-info video-id))
+         (entry-text (browsel-youtube--escape-template
+                      (browsel-youtube--build-entry
+                       url title selection oembed api-info video-id)))
          (org-capture-templates
           `(("v" "Video for later" entry
              (file ,browsel-youtube-videos-file)
@@ -520,6 +545,7 @@ If no transcript is available, writes a stub org file and logs to *Messages*."
                                   (browsel--warn "oEmbed fetch failed (continuing without): %s"
                                                        (error-message-string e))
                                   nil)))
+                   (title      (browsel-youtube--resolve-title title oembed api-info))
                    (entry      (replace-regexp-in-string
                                 "^\\* TODO " "* "
                                 (browsel-youtube--build-entry

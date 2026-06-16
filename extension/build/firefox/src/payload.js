@@ -12,12 +12,21 @@
 //   page-url-with-selection  url, title, text (current selection)
 //   selection-text           url, title, text (selection or click target)
 //   page-html                url, title, html (main/article/body innerHTML)
-//   link-url                 url = info.linkUrl, title = selection text
+//   link-url                 url = info.linkUrl, title = the anchor's
+//                            innerText (read from the live DOM); "" when
+//                            no matching <a href> is found.
 //   image-url                url = info.srcUrl, title = tab title
 //   url                      context-aware: link URL > image URL > tab URL.
-//                            Use this when a single menu serves multiple
-//                            triggers (e.g. "page" + "link") and you want
-//                            the click to decide which URL to send.
+//                            With a link, title = anchor text (as in
+//                            link-url); otherwise title = selection text or
+//                            the tab title.  Use when a single menu serves
+//                            multiple triggers (e.g. "page" + "link") and
+//                            you want the click to decide which URL to send.
+//   url-only                 like "url" but returns just { url } with no
+//                            title.  Use when the Emacs handler has its own
+//                            authoritative title source (e.g. YouTube oEmbed)
+//                            and would only have to ignore whatever the
+//                            anchor's aria-label happens to read out.
 //
 // Object kinds:
 //   { kind: "tab-message", method: "...", message: { ... }? }
@@ -34,6 +43,39 @@
 import { executeInTab } from "./executor.js";
 
 const api = (typeof browser !== "undefined") ? browser : chrome;
+
+async function readLinkTextInTab(tabId, linkUrl) {
+  // Find the first <a href> whose normalized href equals the URL Chrome
+  // reported for the click, and return its accessible name: aria-label
+  // → title → trimmed innerText → first <img>'s alt.  Same fallback
+  // chain Chrome uses for the link's accessibility name and tooltip,
+  // so a plain <a>Click here</a> still returns "Click here" while a
+  // YouTube thumbnail anchor (which wraps an <img> plus a duration
+  // badge) returns the full descriptive aria-label instead of the
+  // badge's "12:34".  Empty string means no matching anchor or no
+  // useful text — Emacs falls back to its own metadata lookup then.
+  try {
+    return (await executeInTab({
+      tabId,
+      func: (href) => {
+        const a = [...document.querySelectorAll("a[href]")]
+                    .find((el) => el.href === href);
+        if (!a) return "";
+        const aria = a.getAttribute("aria-label")?.trim();
+        if (aria) return aria;
+        const title = a.getAttribute("title")?.trim();
+        if (title) return title;
+        const text = a.innerText?.trim();
+        if (text) return text;
+        const alt = a.querySelector("img[alt]")?.getAttribute("alt")?.trim();
+        return alt ?? "";
+      },
+      args: [linkUrl],
+    })) ?? "";
+  } catch (e) {
+    return "";
+  }
+}
 
 async function readSelectionInTab(tabId) {
   try {
@@ -113,18 +155,33 @@ export async function gatherPayload(payload, { tab, info } = {}) {
     case "page-html":
       return await extractMainHtml(tab.id);
 
-    case "link-url":
-      return { url: info?.linkUrl ?? tab.url, title: info?.selectionText ?? tab.title };
+    case "link-url": {
+      if (info?.linkUrl) {
+        return { url: info.linkUrl,
+                 title: await readLinkTextInTab(tab.id, info.linkUrl) };
+      }
+      return { url: tab.url, title: tab.title };
+    }
 
     case "image-url":
       return { url: info?.srcUrl ?? tab.url, title: tab.title };
 
-    case "url":
+    case "url": {
       // Context-aware: prefer the most specific URL the click implies.
+      // When a link is involved the title is the link's anchor text;
+      // otherwise fall back to selection text or the tab title.
+      if (info?.linkUrl) {
+        return { url: info.linkUrl,
+                 title: await readLinkTextInTab(tab.id, info.linkUrl) };
+      }
       return {
-        url:   info?.linkUrl ?? info?.srcUrl ?? tab.url,
+        url:   info?.srcUrl ?? tab.url,
         title: info?.selectionText || tab.title,
       };
+    }
+
+    case "url-only":
+      return { url: info?.linkUrl ?? info?.srcUrl ?? tab.url };
 
     default:
       throw new Error(`unknown payload kind: ${payload}`);
