@@ -1,7 +1,7 @@
 {
   "extension": {
     "name": "Browsel (Emacs bridge)",
-    "version": "0.8",
+    "version": "0.85",
     "description": "Bidirectional WebSocket bridge between a WebExtension (Chrome or Firefox) and a running Emacs instance.",
 
     "options_ui": {

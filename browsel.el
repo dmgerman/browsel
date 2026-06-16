@@ -6,7 +6,7 @@
 ;; Maintainer: Daniel M. German <dmg@turingmachine.org>
 ;; Keywords: comm, tools, browser, org
 ;; URL: https://github.com/dmgerman/browsel
-;; Package-Requires: ((emacs "27.1") (websocket "1.13"))
+;; Package-Requires: ((emacs "27.1") (websocket "1.13") (org "9.4"))
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;;
@@ -70,7 +70,7 @@
 (declare-function org-roam-capture-    "org-roam"    (&rest args))
 (declare-function org-roam-node-create "org-roam"    (&rest args))
 
-(defconst browsel-version "0.8"
+(defconst browsel-version "0.85"
   "Current version of the browsel package.")
 
 ;;;###autoload

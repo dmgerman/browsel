@@ -6,7 +6,7 @@
 ;; Maintainer: Daniel M. German <dmg@turingmachine.org>
 ;; Keywords: comm, tools, browser, org, languages
 ;; URL: https://github.com/dmgerman/browsel
-;; Package-Requires: ((emacs "27.1") (browsel "0.8") (org "9.4"))
+;; Package-Requires: ((emacs "27.1") (org "9.4"))
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;;

@@ -60,7 +60,7 @@ SHARED_FILES := config.json \
 # under targets/$(TARGET)/, so adding a new file in a target tree
 # requires no Makefile edit.
 
-.PHONY: default all chrome firefox build package lint clean help
+.PHONY: default all chrome firefox build package lint clean help bump
 
 # `make` with no arguments builds every known target.
 default: all
@@ -87,6 +87,8 @@ help:
 	@echo "                      (set TARGET=firefox for the Firefox variant)"
 	@echo "  make lint           validate config.json and check source files exist"
 	@echo "  make clean          remove build/ and $(DIST_DIR)/"
+	@echo "  make bump VERSION=X.Y[.Z]"
+	@echo "                      update browsel.el + config.json in lockstep"
 
 # ── Source-side checks (no build artefacts) ─────────────────────────────────
 
@@ -155,3 +157,17 @@ package: build $(DIST_DIR)
 
 clean:
 	rm -rf build $(DIST_DIR)
+
+# ── Version bump ─────────────────────────────────────────────────────────────
+#
+# `browsel-version' in ../browsel.el and `extension.version' in
+# config.json must be the same string (CLIENT_HELLO is strict on
+# exact-match).  `make bump VERSION=X.Y[.Z]' rewrites both in place.
+# Rebuild afterwards (`make' or `make chrome'/`make firefox') so the
+# bumped version reaches manifest.json.
+
+bump:
+	@if [ -z "$(VERSION)" ]; then \
+	  echo 'usage: make bump VERSION=X.Y[.Z]'; exit 1; \
+	fi
+	@python3 scripts/bump-version.py "$(VERSION)"

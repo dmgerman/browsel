@@ -57,10 +57,11 @@ the short form.
    (use-package browsel
      :load-path "/path/to/browsel"
      :config
-     (require 'browsel-www)      ; SAVE_PAGE
-     (require 'browsel-chatgpt)  ; CHATGPT
-     (require 'browsel-youtube)  ; YOUTUBE + YOUTUBE_TRANSCRIPT
-     (require 'browsel-babel)    ; org-babel browsel-js blocks
+     (require 'browsel-www)         ; SAVE_PAGE
+     (require 'browsel-chatgpt)     ; CHATGPT
+     (require 'browsel-youtube)     ; YOUTUBE + YOUTUBE_TRANSCRIPT
+     (require 'browsel-babel)       ; org-babel browsel-js blocks
+     (require 'browsel-tab-manager) ; M-x browsel-tab-manager-jump-to-tab
      (browsel-start))
    #+end_src
 
@@ -395,6 +396,22 @@ keys and response shape are documented in =CONTRIBUTING.org=.
 (browsel-request "OPEN_TAB" '(:url "https://example.com"))
 #+end_src
 
+** Jump to a tab
+
+=M-x browsel-tab-manager-jump-to-tab= lists every open tab, sorted
+by =:lastAccessed= descending, and focuses the pick.  The prefix
+marks =a=ctive, =s=ound, =i=ncognito; space when unset.
+
+#+begin_example
+[a  ] Inbox (28) - xyz@gmail.com - Gmail — mail.google.com
+[ s ] 2026 F1 Barcelona GP race analysis - YouTube — www.youtube.com
+[  i] Search results — duckduckgo.com
+[   ] GitHub - dmgerman/browsel — github.com
+#+end_example
+
+With one browser connected it targets that one.  With two, pick the
+target with =M-x browsel-tab-manager-set-client= (=C-u= resets).
+
 * Setup
 
 ** Requirements
@@ -445,10 +462,11 @@ feature; comment out any you do not want loaded:
   ;; :load-path "/path/to/browsel"
   :after websocket
   :config
-  (require 'browsel-www)      ; SAVE_PAGE        (web archive)
-  (require 'browsel-chatgpt)  ; CHATGPT          (save conversation)
-  (require 'browsel-youtube)  ; YOUTUBE + YOUTUBE_TRANSCRIPT
-  (require 'browsel-babel)    ; org-babel browsel-js blocks
+  (require 'browsel-www)         ; SAVE_PAGE        (web archive)
+  (require 'browsel-chatgpt)     ; CHATGPT          (save conversation)
+  (require 'browsel-youtube)     ; YOUTUBE + YOUTUBE_TRANSCRIPT
+  (require 'browsel-babel)       ; org-babel browsel-js blocks
+  (require 'browsel-tab-manager) ; M-x browsel-tab-manager-jump-to-tab
   (browsel-start))
 #+end_src
 
@@ -473,6 +491,7 @@ Configuration variables for paths, output locations, and credentials
 | =browsel-youtube-transcript-dir=  | where transcripts are written                 |
 | =browsel-youtube-api-key=         | YouTube Data API v3 key (for video metadata)  |
 | =browsel-org-capture-key=         | org-capture template key for browser captures |
+| =browsel-tab-manager-client=      | preferred client when both browsers connected |
 
 The full list is in =CONTRIBUTING.org=.
 
