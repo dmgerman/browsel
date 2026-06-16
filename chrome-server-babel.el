@@ -4,10 +4,9 @@
 
 ;; Author: Daniel M. German <dmg@turingmachine.org>
 ;; Maintainer: Daniel M. German <dmg@turingmachine.org>
-;; Version: 0.5
 ;; Keywords: comm, tools, browser, org, languages
 ;; URL: https://github.com/dmgerman/chrome-server
-;; Package-Requires: ((emacs "27.1") (chrome-server "0.5") (org "9.4"))
+;; Package-Requires: ((emacs "27.1") (chrome-server "0.72") (org "9.4"))
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;;
@@ -35,8 +34,14 @@
 ;;   #+end_src
 ;;
 ;; Header arguments:
-;;   :world  "MAIN" (default) — sees the page's actual `window'/state.
-;;           "USER_SCRIPT"    — isolated world; cannot read page state.
+;;   :world  "USER_SCRIPT" (default) — isolated world; sees the DOM
+;;             but not page-defined globals or functions.  Portable
+;;             between Chrome and Firefox.
+;;           "MAIN" — page's own `window' / state.  Required for
+;;             reading page-framework state (e.g.
+;;             `window.ytInitialPlayerResponse') or calling
+;;             page-defined functions.  Chrome only — not supported
+;;             on Firefox MV2.
 ;;   :tab-id N — execute in this tab id instead of the active tab.
 ;;   :frames "all" — return the InjectionResult array for every frame
 ;;           the script ran in.  Default: the first frame's value.
@@ -87,7 +92,7 @@ RESPONSE is the EVAL_IN_ACTIVE_TAB response payload."
 (defun org-babel-execute:chrome-js (body params)
   "Execute BODY as JavaScript in the active browser tab.
 PARAMS is the alist of header arguments from the source block."
-  (let* ((world    (or (cdr (assq :world  params)) "MAIN"))
+  (let* ((world    (or (cdr (assq :world  params)) "USER_SCRIPT"))
          (tab-id   (cdr (assq :tab-id params)))
          (frames   (cdr (assq :frames params)))
          (client   (cdr (assq :client params)))

@@ -12,23 +12,29 @@ act on it.
 =chrome-server= is composed of two parts:
 
 1. *An Emacs side*.  A WebSocket server on =127.0.0.1:9130= that
-   registers handlers for actions initiated from Chrome, plus an
-   elisp API for actions Emacs initiates.
-2. *A Chrome extension*.  An MV3 extension that connects to the
-   Emacs server, registers the right-click menu items, implements
-   the toolbar icon and the popup, and routes requests in both
-   directions.
+   registers handlers for actions initiated from the browser, plus
+   an elisp API for actions Emacs initiates.
+2. *A browser extension*.  A WebExtension that connects to the Emacs
+   server, registers the right-click menu items, implements the
+   toolbar icon and the popup, and routes requests in both
+   directions.  Two builds ship from the same sources: a Chrome
+   Manifest V3 build and a Firefox Manifest V2 build.  Both speak
+   the same wire protocol and identify themselves to Emacs by name
+   (=chrome=, =firefox=) so a single Emacs can drive both at once.
 
-Both must be running.  The Chrome extension auto-reconnects, so
-restarting Emacs is non-disruptive — the popup transitions from
-Connected to Connecting and back.  Setup for each side is below.
+Both must be running.  The extension auto-reconnects, so restarting
+Emacs is non-disruptive — the popup transitions from Connected to
+Connecting and back.  Setup for each side is below.
 
 Security has been a major concern in the design of this module. Please see [[*Security][Security]] below
 for more information.
 
-=chrome-server= was inspired by [[https://github.com/bitspook/spookfox][spookfox]], a similar Emacs/Firefox integration. The protocol and handler-registry pattern
-are adapted from it.  =chrome-server= targets Chrome rather than Firefox. Its other major enhancement is that it provides
-two-way communication: Emacs can Chrome handlers, and Chrome can invoking Emacs handlers.
+=chrome-server= was inspired by [[https://github.com/bitspook/spookfox][spookfox]], a similar Emacs/Firefox
+integration.  The protocol and handler-registry pattern are adapted
+from it.  =chrome-server= started on Chrome and now ships a Firefox
+build as well.  Its other major enhancement is that it provides
+two-way communication: Emacs can invoke browser handlers, and the
+browser can invoke Emacs handlers.
 
 For implementation details — adding new actions, the wire protocol,
 the JSON schemas — see =CONTRIBUTING.org=.
@@ -56,14 +62,19 @@ the short form.
 
    Comment out any =require= for a feature you do not want.
 
-2. *Load the Chrome extension.*  In Chrome:
+2. *Load the browser extension.*  Both builds are committed already
+   built; no build step is required.
 
+   In Chrome:
    1. Open =chrome://extensions= and turn on *Developer mode* (top right).
-   2. Click *Load unpacked* and select =extension/build/chrome/= from
-      this repository — the directory is committed already built, so no
-      build step is required.
+   2. Click *Load unpacked* and select =extension/build/chrome/=.
    3. (Only if you want JavaScript evaluation) open the extension's
       *Details* page and toggle *Allow User Scripts* on.
+
+   In Firefox:
+   1. Open =about:debugging= and click *This Firefox*.
+   2. Click *Load Temporary Add-on…* and select
+      =extension/build/firefox/manifest.json=.
 
 The popup should show ●  *Connected* within a few seconds.  If it
 does not, click *Reconnect*.
@@ -198,20 +209,21 @@ keys:
 |----------+------------------------------------------------------------------------|
 | =:code=  | string — the JavaScript to evaluate                                    |
 | =:tabId= | optional integer — target tab (default: the active tab in the current window) |
-| =:world= | optional string — ="MAIN"= (default) or ="USER_SCRIPT"=                |
+| =:world= | optional string — ="USER_SCRIPT"= (default) or ="MAIN"=                |
 
 The =:world= key chooses which JavaScript execution context the
-snippet runs in.  In ="MAIN"= the snippet shares =window= with the
-page's own code: it can read variables declared by the page (for
-example =window.ytInitialPlayerResponse= on a YouTube watch page),
-call functions defined by the page's framework, and inspect any
-state the application keeps in globals.  This is what is needed when
-the goal is to extract or operate on values the page itself
-constructed.  In ="USER_SCRIPT"= the snippet runs in an isolated
-context: it can still read and modify the DOM, but its JavaScript
-variables and functions are not visible to (or visible from) the
-page's own code.  Use it when DOM access is enough and isolation
-from the page is preferable.
+snippet runs in.  ="USER_SCRIPT"= (the default) is an isolated
+context: it can read and modify the DOM but does not share =window=
+with the page's own code; variables and functions defined by the
+page are not visible from the snippet.  This default works on both
+Chrome and Firefox.
+
+="MAIN"= shares =window= with the page's own code.  Use it when the
+goal is to read page-framework state (for example
+=window.ytInitialPlayerResponse= on a YouTube watch page) or to call
+functions defined by the page.  ="MAIN"= is *Chrome only* — Firefox
+MV2 has no equivalent and the request will fail with a clear error.
+A block that needs ="MAIN"= is implicitly Chrome-only.
 
 The response =:result= is an array of =InjectionResult= plists, one
 per frame the script ran in.  Each entry carries =:documentId=,
@@ -265,13 +277,21 @@ behind an org-mode source block: the body of the block becomes the
 returned as the block's result.  Babel handles the response
 extraction, so the elisp glue is invisible.
 
-The block accepts three optional header arguments:
+The block accepts four optional header arguments:
 
-| Argument    | Values                          | Default      |
-|-------------+---------------------------------+--------------|
-| =:world=    | ="MAIN"= or ="USER_SCRIPT"=     | ="MAIN"=     |
-| =:tab-id=   | integer tab id                  | active tab   |
-| =:frames=   | ="all"= for per-frame results   | first frame  |
+| Argument    | Values                          | Default          |
+|-------------+---------------------------------+------------------|
+| =:world=    | ="USER_SCRIPT"= or ="MAIN"=     | ="USER_SCRIPT"=  |
+| =:tab-id=   | integer tab id                  | active tab       |
+| =:frames=   | ="all"= for per-frame results   | first frame      |
+| =:client=   | ="chrome"= or ="firefox"=       | sole client      |
+
+="USER_SCRIPT"= is the portable default: the block runs in an
+isolated world that can read and modify the DOM but cannot see
+page-defined globals or functions.  Pass =:world "MAIN"= when the
+block needs to read the page's own =window= state or call functions
+defined by the page; ="MAIN"= is Chrome only and a block that
+specifies it will fail on Firefox MV2.
 
 *Read the current video playback time:*
 
@@ -468,6 +488,15 @@ In Chrome:
 The popup should turn green within a few seconds.  If not, click
 *Reconnect*.
 
+If the popup shows *Version mismatch — rebuild and reload* in red
+and a ={!}= badge appears on the toolbar icon, the extension and the
+Emacs side disagree on the chrome-server version.  Rebuild the
+extension (=make= in =extension/=), reload the extension card in
+=chrome://extensions=, and confirm =M-x chrome-server-version=
+reports the same string as the version shown at the bottom of the
+options page.  The protocol is pre-1.0 and the check is strict to
+catch silent skew before it causes confusing failures.
+
 *Optional: rebuilding after edits.*  If you customise
 =extension/config.json= or change anything under =extension/src/=,
 =extension/html/=, =extension/icons/=, or =extension/targets/chrome/=,
@@ -475,9 +504,43 @@ run =make= from the =extension/= directory to refresh
 =extension/build/chrome/=.  Then reload the extension card in
 =chrome://extensions= to pick up the change.
 
-A second target tree, =extension/targets/firefox/=, is present as a
-placeholder for a future Firefox build.  =make firefox= produces
-=extension/build/firefox/= but does not yet connect to Emacs.
+** Firefox extension
+
+The built Firefox extension is included in this repository under
+=extension/build/firefox/= and is a Manifest V2 extension.  As with
+the Chrome build, the directory is committed already built; no
+build step is required to use it as shipped.  MV2 was the
+deliberate choice here: Firefox still supports it indefinitely and
+provides a genuine persistent background page, which holds the
+WebSocket to Emacs without the workarounds MV3 requires.
+
+To load it:
+
+1. Open =about:debugging= in Firefox.
+2. Click *This Firefox* in the left sidebar.
+3. Click *Load Temporary Add-on…*
+4. Select =extension/build/firefox/manifest.json=.
+
+Temporary add-ons unload when Firefox restarts; a signed XPI build
+is on the to-do list.  The =browser_specific_settings.gecko.id= is
+already set so a signed install would have a stable identity.
+
+*What works the same as Chrome:* both browser → Emacs (right-click
+menu, popup buttons, keyboard commands, content-script relay) and
+Emacs → browser (=GET_ALL_TABS=, =OPEN_TAB=, =FOCUS_TAB=, the
+capture handlers, etc.) routing.  Each browser identifies itself via
+=CLIENT_HELLO= and Emacs targets one of several connected browsers
+through the =CLIENT= argument as described above.
+
+*What differs:*
+
+- =EVAL_IN_ACTIVE_TAB= and =chrome-js= source blocks run in the
+  content-script isolated world.  The portable ="USER_SCRIPT"=
+  default works on both browsers; passing =:world "MAIN"= is Chrome
+  only and a block that needs MAIN will surface a clear error on
+  Firefox.
+- Firefox MV2 does not require a "Allow User Scripts" toggle —
+  =browser.tabs.executeScript= runs without separate user opt-in.
 
 ** Customising
 

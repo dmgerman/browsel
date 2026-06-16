@@ -17,6 +17,7 @@ function setStatus(status) {
     CONNECTED:    "Connected",
     CONNECTING:   "Connecting…",
     DISCONNECTED: "Disconnected",
+    INCOMPATIBLE: "Version mismatch — rebuild and reload",
   }[status] ?? "Unknown";
   statusText.textContent = label;
 }

@@ -1,6 +1,6 @@
 {
   "name": "Chrome Server (Emacs bridge)",
-  "version": "2.0",
+  "version": "0.72",
   "description": "Bidirectional WebSocket bridge between Chrome and a running Emacs instance.",
   "options_ui": {
     "page": "html/options.html",

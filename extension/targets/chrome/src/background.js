@@ -117,6 +117,28 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       return true;
     }
 
+    case "WS_INCOMPATIBLE": {
+      log("incompatible:", msg.message);
+      chrome.notifications.create({
+        type: "basic",
+        iconUrl: chrome.runtime.getURL("icons/icon48.png"),
+        title: "Chrome Server",
+        message: `Version mismatch: ${msg.message}`,
+      });
+      chrome.action.setBadgeText({ text: "!" }).catch(() => {});
+      chrome.action.setBadgeBackgroundColor({ color: "#c33" }).catch(() => {});
+      return false;
+    }
+
+    case "GET_VERSION": {
+      // Offscreen documents only expose a subset of chrome.runtime
+      // (the messaging APIs); getManifest is not part of that subset.
+      // The SW reads it on offscreen's behalf so the version that
+      // travels in CLIENT_HELLO is the same one the manifest carries.
+      sendResponse({ version: chrome.runtime.getManifest().version });
+      return false;
+    }
+
     default:
       return false;
   }

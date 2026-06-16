@@ -4,7 +4,6 @@
 
 ;; Author: Daniel M. German <dmg@turingmachine.org>
 ;; Maintainer: Daniel M. German <dmg@turingmachine.org>
-;; Version: 0.5
 ;; Keywords: comm, tools, browser, org
 ;; URL: https://github.com/dmgerman/chrome-server
 ;; Package-Requires: ((emacs "27.1") (websocket "1.13"))
@@ -70,6 +69,24 @@
 (declare-function org-capture          "org-capture" (&optional goto keys))
 (declare-function org-roam-capture-    "org-roam"    (&rest args))
 (declare-function org-roam-node-create "org-roam"    (&rest args))
+
+(defconst chrome-server-version "0.72"
+  "Current version of the chrome-server package.")
+
+;;;###autoload
+(defun chrome-server-version (&optional here)
+  "Return the chrome-server version string.
+Interactively, display the version in the echo area.  With prefix
+argument HERE, insert the version at point instead.  When called
+from Lisp the return value is always the version string."
+  (interactive "P")
+  (let ((string (format "chrome-server %s" chrome-server-version)))
+    (cond
+     (here
+      (insert string))
+     ((called-interactively-p 'interactive)
+      (message "%s" string))))
+  chrome-server-version)
 
 ;; ── Configuration ────────────────────────────────────────────────────────────
 
@@ -409,13 +426,28 @@ Optional N is an internal recursion counter; callers should omit it."
   "Built-in CLIENT_HELLO handler.
 Renames the entry for the websocket currently being dispatched to
 the client name announced in PAYLOAD, with a -N suffix appended if
-the name is already taken by a different websocket."
+the name is already taken by a different websocket.
+
+The PAYLOAD must include a `:version' string that exactly matches
+`chrome-server-version'.  The version check is strict: any mismatch
+(including a missing or empty version) rejects the hello with an
+error payload, leaves the client unregistered (its placeholder
+\"unknown-N\" name persists), and the extension's ws-client treats
+the connection as incompatible and stops the reconnect loop."
   (let ((ws       chrome-server--current-ws)
-        (requested (plist-get payload :client)))
+        (requested (plist-get payload :client))
+        (version   (plist-get payload :version)))
     (unless ws
       (error "CLIENT_HELLO invoked outside a request dispatch"))
     (unless (and (stringp requested) (not (string-empty-p requested)))
       (error "CLIENT_HELLO requires payload.client (non-empty string)"))
+    (unless (and (stringp version) (not (string-empty-p version)))
+      (error "CLIENT_HELLO requires payload.version (non-empty string); \
+emacs=%s, extension sent: %S" chrome-server-version version))
+    (unless (string= version chrome-server-version)
+      (error "version mismatch: emacs=%s extension=%s; \
+rebuild and reload both sides"
+             chrome-server-version version))
     (let* ((final-name (chrome-server--unique-client-name requested ws))
            (others     (cl-remove-if (lambda (c) (eq (cdr c) ws))
                                      chrome-server--clients)))

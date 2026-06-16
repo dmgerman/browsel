@@ -32,7 +32,17 @@ import { startWebSocketClient } from "./ws-client.js";
 
 const client = startWebSocketClient({
   clientName: "firefox",
+  version:    browser.runtime.getManifest().version,
   onStatus:   setWsStatus,
+  onIncompatible: (message) => {
+    console.warn("[bg]", "version mismatch:", message);
+    browser.notifications.create({
+      type: "basic",
+      iconUrl: browser.runtime.getURL("icons/icon48.png"),
+      title: "Chrome Server",
+      message: `Version mismatch: ${message}`,
+    });
+  },
   onIncomingRequest: dispatchIncomingEmacsRequest,
 });
 

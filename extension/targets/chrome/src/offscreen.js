@@ -37,11 +37,46 @@ function dispatchIncomingViaServiceWorker(request) {
   });
 }
 
+// Offscreen documents expose only the messaging subset of
+// chrome.runtime — `getManifest` is not in that subset, so we ask the
+// service worker for the extension's version.  Top-level await on an
+// ES module delays the rest of this file until the SW responds, which
+// is acceptable here because the SW's onMessage listener is registered
+// synchronously at SW boot and is reachable as soon as this document
+// has been created.
+function fetchVersionFromServiceWorker() {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(
+      { target: "service-worker", type: "GET_VERSION" },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        if (!response?.version) {
+          reject(new Error("service worker returned no version"));
+          return;
+        }
+        resolve(response.version);
+      },
+    );
+  });
+}
+
+const version = await fetchVersionFromServiceWorker();
+log("starting ws client at version", version);
+
 const client = startWebSocketClient({
   clientName: "chrome",
+  version,
   onStatus: (status) => {
     chrome.runtime
       .sendMessage({ target: "service-worker", type: "WS_STATUS", status })
+      .catch(() => {});
+  },
+  onIncompatible: (message) => {
+    chrome.runtime
+      .sendMessage({ target: "service-worker", type: "WS_INCOMPATIBLE", message })
       .catch(() => {});
   },
   onIncomingRequest: dispatchIncomingViaServiceWorker,

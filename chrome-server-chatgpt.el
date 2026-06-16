@@ -4,10 +4,9 @@
 
 ;; Author: Daniel M. German <dmg@turingmachine.org>
 ;; Maintainer: Daniel M. German <dmg@turingmachine.org>
-;; Version: 0.5
 ;; Keywords: comm, tools, browser, org
 ;; URL: https://github.com/dmgerman/chrome-server
-;; Package-Requires: ((emacs "27.1") (chrome-server "0.5"))
+;; Package-Requires: ((emacs "27.1") (chrome-server "0.72"))
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;;

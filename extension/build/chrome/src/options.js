@@ -7,6 +7,8 @@
 const api = (typeof browser !== "undefined") ? browser : chrome;
 
 const menusEl    = document.getElementById("menus");
+const versionEl  = document.getElementById("version");
+versionEl.textContent = `v${api.runtime.getManifest().version}`;
 const handlersEl = document.getElementById("handlers");
 const statusEl   = document.getElementById("status");
 const raiseBody  = document.querySelector("#raise-table tbody");

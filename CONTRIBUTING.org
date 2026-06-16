@@ -18,7 +18,7 @@ for what =chrome-server= does and how it's set up.
 | =extension/config.json=           | Single source of truth for the extension (shared + per-target overlays)                    |
 | =extension/src/=                  | Shared extension JS (handlers, popup, options, content scripts, consent)                   |
 | =extension/html/=, =icons/=       | Shared extension HTML + icons                                                              |
-| =extension/targets/<name>/=       | Per-target overlay (=chrome/= today; =firefox/= placeholder)                                |
+| =extension/targets/<name>/=       | Per-target overlay (=chrome/= Manifest V3, =firefox/= Manifest V2)                          |
 | =extension/scripts/=              | =build-manifest.py=, =make-red-icons.py=                                                   |
 | =extension/Makefile=              | =make= (=all=) / =make chrome= / =make firefox= / =make package= / =make lint=               |
 | =extension/build/<target>/=       | Generated per-target loadable directory.  Gitignored.                                       |
@@ -50,13 +50,28 @@ Timeouts: =chrome-server-request-timeout= (default 10s) on the Emacs
 side, 5s on the offscreen-doc side.
 
 *Client identification.*  Every browser issues a =CLIENT_HELLO=
-request as its first frame, with payload ={ client: "chrome" }= or
-={ client: "firefox" }=.  Emacs records the name on the websocket
-and uses it to route Emacs-to-browser requests when more than one
-browser is connected.  Until =CLIENT_HELLO= arrives the connection
-is tracked as =unknown-N=.  If two clients announce the same name a
-=-2=, =-3=, … suffix is appended.  Inspect the current roster with
+request as its first frame, with payload
+={ client: "chrome", version: "0.72" }= or the Firefox equivalent.
+Emacs records the name on the websocket and uses it to route
+Emacs-to-browser requests when more than one browser is connected.
+Until =CLIENT_HELLO= arrives the connection is tracked as
+=unknown-N=.  If two clients announce the same name a =-2=, =-3=, …
+suffix is appended.  Inspect the current roster with
 =chrome-server-connected-clients=.
+
+*Version gate.*  The =version= field in =CLIENT_HELLO= must match
+=chrome-server-version= exactly (string equality).  A missing field,
+empty string, or any value that differs causes the handler to reply
+with ={ status: "error", message: "version mismatch: emacs=X
+extension=Y" }= and leave the client unregistered.  The extension's
+=ws-client.js= reads that reply, transitions to a terminal
+=INCOMPATIBLE= status, closes the socket, and suppresses the
+reconnect loop until the user clicks =Reconnect= in the popup (which
+is itself useful only after rebuilding both sides).  The popup
+displays "Version mismatch — rebuild and reload" in this state and
+=chrome.action.setBadgeText= surfaces a ={!}= badge on the toolbar.
+The policy is strict (no semver-style flex) because the protocol is
+still pre-1.0 and any bump may be breaking.
 
 ** Request flow
 
@@ -93,12 +108,13 @@ buffers per-client via =chrome-server--rx-buffers= and only parses on
 
 Top-level:
 
-| Key              | Purpose                                                          |
-|------------------+------------------------------------------------------------------|
-| =extension=      | MV3 manifest infrastructure (name, version, permissions, …)     |
-| =menus=          | Right-click menu entries (each may carry a =command= hotkey)    |
-| =handlers=       | =chrome.*= calls Emacs is allowed to invoke (Emacs → browser)   |
-| =contentScripts= | Declarative content scripts (matches/js/run_at)                  |
+| Key                 | Purpose                                                                         |
+|---------------------+---------------------------------------------------------------------------------|
+| =extension=         | Manifest fields common to every target (name, version, icons, =options_ui=).    |
+| =extensionTargets=  | Per-target overlays.  =chrome= supplies MV3 fields (=service_worker=, =action=, =scripting=/=offscreen=/=userScripts= permissions, =host_permissions=); =firefox= supplies MV2 fields (persistent =background.scripts=, =browser_action=, =browser_specific_settings.gecko=, =<all_urls>= in =permissions=). |
+| =menus=             | Right-click menu entries (each may carry a =command= hotkey).                   |
+| =handlers=          | =chrome.*= calls Emacs is allowed to invoke (Emacs → browser).                  |
+| =contentScripts=    | Declarative content scripts (matches/js/run_at).                                |
 
 ** Menu entry
 
@@ -324,8 +340,8 @@ worker registration failed.  Status code: 3".
 #+begin_src bash
 # Extension (default builds every known target)
 cd extension && make           # same as `make all`: chrome + firefox
-cd extension && make chrome    # only build/chrome/
-cd extension && make firefox   # only build/firefox/ (placeholder)
+cd extension && make chrome    # only build/chrome/ (Manifest V3)
+cd extension && make firefox   # only build/firefox/ (Manifest V2)
 
 # Elisp — byte-compile to catch warnings:
 emacs --batch -Q --eval '(require (quote package))' \

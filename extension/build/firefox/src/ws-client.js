@@ -21,9 +21,23 @@
 //                             "firefox".  Sent in the first frame so
 //                             Emacs can address requests at a specific
 //                             browser when more than one is connected.
+//   options.version           REQUIRED string, the extension's
+//                             manifest version.  Sent alongside the
+//                             client name; Emacs requires an exact
+//                             match against its `chrome-server-version'
+//                             or it rejects the hello and the
+//                             connection enters the terminal
+//                             INCOMPATIBLE state.
 //   options.onStatus          (status) → void.  Called on every change
 //                             of "CONNECTING" / "CONNECTED" /
-//                             "DISCONNECTED".
+//                             "DISCONNECTED" / "INCOMPATIBLE".  The
+//                             INCOMPATIBLE state is terminal: the
+//                             socket is closed and no reconnect is
+//                             attempted until reconnect() is called
+//                             explicitly.
+//   options.onIncompatible    Optional (message) → void.  Invoked
+//                             once with the mismatch text so the host
+//                             can raise a notification or badge.
 //   options.onIncomingRequest (request) → Promise<responsePayload>.
 //                             Called when Emacs sends a request frame.
 //                             The returned payload is sent back as
@@ -45,6 +59,9 @@ export function startWebSocketClient(options) {
   if (!options || typeof options.clientName !== "string" || !options.clientName) {
     throw new Error("startWebSocketClient: options.clientName (string) required");
   }
+  if (typeof options.version !== "string" || !options.version) {
+    throw new Error("startWebSocketClient: options.version (string) required");
+  }
   if (typeof options.onStatus !== "function") {
     throw new Error("startWebSocketClient: options.onStatus (function) required");
   }
@@ -60,6 +77,10 @@ export function startWebSocketClient(options) {
   let ws             = null;
   let reconnectTimer = null;
   let status         = "DISCONNECTED";
+  // Terminal state: when set, the close handler suppresses the auto
+  // reconnect.  An explicit reconnect() call clears it so the user can
+  // recover after rebuilding both sides.
+  let incompatible   = false;
   const pending      = new Map();   // requestId → { resolve, reject, timer }
 
   function log(...args) {
@@ -112,9 +133,24 @@ export function startWebSocketClient(options) {
     setStatus("CONNECTED");
     // Identify ourselves first.  This must complete before any other
     // outgoing request, so that Emacs has a name to address us by when
-    // both Chrome and Firefox are connected at once.
+    // both Chrome and Firefox are connected at once.  The hello carries
+    // the extension's version; an exact mismatch against the Emacs side
+    // returns an error reply that we treat as terminal.
     try {
-      await sendRequest("CLIENT_HELLO", { client: options.clientName });
+      const reply = await sendRequest("CLIENT_HELLO", {
+        client:  options.clientName,
+        version: options.version,
+      });
+      if (reply && reply.status === "error") {
+        const message = reply.message ?? "CLIENT_HELLO rejected";
+        log("incompatible:", message);
+        incompatible = true;
+        try { options.onIncompatible?.(message); }
+        catch (e) { log("onIncompatible threw:", e); }
+        setStatus("INCOMPATIBLE");
+        try { ws.close(); } catch (e) { /* already closing */ }
+        return;
+      }
       log("CLIENT_HELLO acknowledged as", options.clientName);
     } catch (e) {
       log("CLIENT_HELLO failed:", e?.message ?? e);
@@ -123,12 +159,17 @@ export function startWebSocketClient(options) {
 
   function onClose() {
     log("closed");
-    setStatus("DISCONNECTED");
     for (const [id, p] of pending) {
       clearTimeout(p.timer);
       p.reject(new Error("WebSocket closed before response"));
       pending.delete(id);
     }
+    if (incompatible) {
+      // Stay in INCOMPATIBLE; an explicit reconnect() call resets the
+      // flag so the user can recover after rebuilding both sides.
+      return;
+    }
+    setStatus("DISCONNECTED");
     scheduleReconnect();
   }
 
@@ -210,6 +251,11 @@ export function startWebSocketClient(options) {
   }
 
   function reconnect() {
+    // Manual reconnect clears the terminal state.  If the underlying
+    // mismatch hasn't been fixed the next CLIENT_HELLO will be rejected
+    // again and incompatible will be set anew; if it has, the
+    // connection proceeds normally.
+    incompatible = false;
     if (ws) {
       try { ws.close(); } catch (e) {}
     }

@@ -107,7 +107,7 @@ const SHAPE_ADAPTERS = {
     const result = await evalInTab({
       tabId,
       code:  payload.code,
-      world: payload.world ?? "MAIN",
+      world: payload.world ?? "USER_SCRIPT",
     });
     return { status: "ok", result };
   },

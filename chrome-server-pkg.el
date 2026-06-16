@@ -8,8 +8,8 @@
 ;; of the same distribution but are loaded only when the user calls
 ;; (require ...) on each.
 
-(define-package "chrome-server" "0.5"
-  "Bidirectional bridge between Emacs and a Chrome MV3 extension"
+(define-package "chrome-server" "0.72"
+  "Bidirectional bridge between Emacs and a Chrome/Firefox extension"
   '((emacs "27.1") (websocket "1.13"))
   :url       "https://github.com/dmgerman/chrome-server"
   :keywords  '("comm" "tools" "browser" "org")
