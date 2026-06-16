@@ -30,23 +30,24 @@
 //
 // Each handler returns an object suitable as the WS request payload.
 
+import { executeInTab } from "./executor.js";
+
 const api = (typeof browser !== "undefined") ? browser : chrome;
 
 async function readSelectionInTab(tabId) {
   try {
-    const results = await api.scripting.executeScript({
-      target: { tabId },
+    return (await executeInTab({
+      tabId,
       func: () => window.getSelection?.().toString() ?? "",
-    });
-    return results?.[0]?.result ?? "";
+    })) ?? "";
   } catch (e) {
     return "";
   }
 }
 
 async function extractMainHtml(tabId) {
-  const results = await api.scripting.executeScript({
-    target: { tabId },
+  const r = await executeInTab({
+    tabId,
     func: () => {
       const el = document.querySelector("main") ||
                  document.querySelector("article") ||
@@ -55,7 +56,6 @@ async function extractMainHtml(tabId) {
       return { html: el.innerHTML.trim(), url: location.href, title: document.title };
     },
   });
-  const r = results?.[0]?.result;
   if (!r) throw new Error("could not extract page content");
   return r;
 }

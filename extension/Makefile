@@ -38,6 +38,8 @@ MANIFEST_BUILDER := scripts/build-manifest.py
 # Shared sources copied verbatim into every build.  manifest.json is
 # generated and is NOT listed here.
 SHARED_FILES := config.json \
+                src/core.js \
+                src/ws-client.js \
                 src/handlers.js \
                 src/payload.js \
                 src/consent.js \

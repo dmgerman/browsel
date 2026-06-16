@@ -99,7 +99,21 @@ Shared by chrome-server-www and chrome-server-chatgpt backends.")
   "The `websocket-server' process, or nil if not running.")
 
 (defvar chrome-server--clients nil
-  "List of currently connected websocket client objects.")
+  "Alist of currently connected clients as (NAME . WS) pairs.
+NAME is the identifier the client announced via CLIENT_HELLO, or
+\"unknown-N\" until the client identifies itself.  WS is the
+underlying websocket object.")
+
+(defvar chrome-server--connect-counter 0
+  "Monotonic counter for naming unidentified clients.
+Reset on `chrome-server-start'; never decrements during a server's
+lifetime so two unidentified connections cannot collide on the
+same fallback name.")
+
+(defvar chrome-server--current-ws nil
+  "Websocket currently being dispatched, bound during handler execution.
+Built-in handlers (notably CLIENT_HELLO) read this to discover which
+client sent the request.  User-registered handlers should ignore it.")
 
 (defvar chrome-server--handlers nil
   "Alist mapping request name (string) to handler function.
@@ -147,6 +161,7 @@ buffer."
              (not (eq (process-status chrome-server--server-process) 'closed)))
     (chrome-server-stop))
   (setq chrome-server--clients nil
+        chrome-server--connect-counter 0
         chrome-server--pending-callbacks nil
         chrome-server--server-process
         (websocket-server
@@ -167,24 +182,33 @@ buffer."
     (websocket-server-close chrome-server--server-process)
     (setq chrome-server--server-process nil))
   (chrome-server--cancel-all-pending "server stopped")
-  (setq chrome-server--clients nil)
+  (setq chrome-server--clients nil
+        chrome-server--connect-counter 0)
   (chrome-server--log "[SERVER] stopped")
   (message "Chrome server stopped"))
 
 ;; ── Connection callbacks ─────────────────────────────────────────────────────
 
 (defun chrome-server--on-open (ws)
-  "Register newly connected client WS."
-  (setq chrome-server--clients (cons ws chrome-server--clients))
-  (chrome-server--log "[CONNECT] clients=%d" (length chrome-server--clients)))
+  "Register newly connected client WS under a placeholder name.
+The client should send a CLIENT_HELLO request as its first frame to
+replace the placeholder with a stable identifier."
+  (let ((name (format "unknown-%d" (cl-incf chrome-server--connect-counter))))
+    (setq chrome-server--clients
+          (cons (cons name ws) chrome-server--clients))
+    (chrome-server--log "[CONNECT] %s (clients=%d)"
+                        name (length chrome-server--clients))))
 
 (defun chrome-server--on-close (ws)
   "Remove disconnected client WS and drop its rx buffer."
-  (setq chrome-server--clients
-        (cl-remove-if (lambda (c) (eq c ws)) chrome-server--clients)
-        chrome-server--rx-buffers
-        (cl-remove-if (lambda (c) (eq (car c) ws)) chrome-server--rx-buffers))
-  (chrome-server--log "[DISCONNECT] clients=%d" (length chrome-server--clients)))
+  (let ((cell (rassq ws chrome-server--clients)))
+    (setq chrome-server--clients
+          (cl-remove-if (lambda (c) (eq (cdr c) ws)) chrome-server--clients)
+          chrome-server--rx-buffers
+          (cl-remove-if (lambda (c) (eq (car c) ws)) chrome-server--rx-buffers))
+    (chrome-server--log "[DISCONNECT] %s (clients=%d)"
+                        (if cell (car cell) "?")
+                        (length chrome-server--clients))))
 
 (defun chrome-server--on-error (_ws sym err)
   "Surface WebSocket error ERR in callback SYM."
@@ -248,7 +272,8 @@ final frame.  Frames with a `:name' field are requests; frames with a
     (let ((response-payload
            (if handler
                (condition-case err
-                   (funcall handler payload)
+                   (let ((chrome-server--current-ws ws))
+                     (funcall handler payload))
                  (error
                   (chrome-server--warn "handler %s signalled: %s"
                                        name (error-message-string err))
@@ -297,13 +322,57 @@ If no pending callback matches (likely already timed out), surfaces a warning."
     (chrome-server--log "[SEND] %s" text)
     (websocket-send-text ws text)))
 
-(defun chrome-server--broadcast (data)
-  "JSON-encode DATA and send it to every connected client.
-Returns the websocket the frame was sent on, or nil if no clients."
-  (let ((ws (car chrome-server--clients)))
-    (when ws
-      (chrome-server--send-to ws data)
-      ws)))
+(defun chrome-server--target-for (client name)
+  "Resolve a request target without signalling.
+Returns one of:
+  (ok   . WS)  — send to WS.
+  (err  . MSG) — abort: caller-supplied CLIENT not connected, or
+                 multiple clients are connected and CLIENT is nil.
+  (none . MSG) — no clients connected at all.
+NAME appears in MSG and is informational only."
+  (cond
+   (client
+    (let ((cell (assoc client chrome-server--clients)))
+      (if cell
+          (cons 'ok (cdr cell))
+        (cons 'err
+              (format
+               "requested client %S is not connected (connected: %s)"
+               client
+               (if chrome-server--clients
+                   (mapconcat #'car chrome-server--clients ", ")
+                 "none"))))))
+   ((null chrome-server--clients)
+    (cons 'none (format "no client connected; dropping request %s" name)))
+   ((= 1 (length chrome-server--clients))
+    (cons 'ok (cdar chrome-server--clients)))
+   (t
+    (cons 'err
+          (format "%d clients connected (%s); specify CLIENT for request %S"
+                  (length chrome-server--clients)
+                  (mapconcat #'car chrome-server--clients ", ")
+                  name)))))
+
+(defun chrome-server-connected-clients ()
+  "Return the list of connected client names, in connection order (newest first)."
+  (mapcar #'car chrome-server--clients))
+
+(defun chrome-server--broadcast (data &optional client)
+  "JSON-encode DATA and send it to one connected client.
+With CLIENT nil and exactly one client connected, that client is the
+target.  With CLIENT a string, the matching named client is targeted.
+Returns the websocket the frame was sent on, or nil if the resolution
+fails (also surfaces a warning so the failure is not silent)."
+  (pcase (chrome-server--target-for client (alist-get 'name data))
+    (`(ok . ,ws)
+     (chrome-server--send-to ws data)
+     ws)
+    (`(err . ,msg)
+     (chrome-server--warn "%s" msg)
+     nil)
+    (`(none . ,msg)
+     (chrome-server--warn "%s" msg)
+     nil)))
 
 ;; ── Handler registry ─────────────────────────────────────────────────────────
 
@@ -323,6 +392,43 @@ response payload.  Re-registering overwrites the previous binding."
         (cl-remove-if (lambda (c) (string= (car c) name))
                       chrome-server--handlers)))
 
+;; ── Built-in CLIENT_HELLO handler ────────────────────────────────────────────
+
+(defun chrome-server--unique-client-name (requested ws &optional n)
+  "Return REQUESTED, possibly with a -N suffix, that no other ws holds.
+WS is permitted to already own the requested name (idempotent reuse).
+Optional N is an internal recursion counter; callers should omit it."
+  (let* ((n         (or n 1))
+         (candidate (if (= n 1) requested (format "%s-%d" requested n)))
+         (cell      (assoc candidate chrome-server--clients)))
+    (if (or (not cell) (eq (cdr cell) ws))
+        candidate
+      (chrome-server--unique-client-name requested ws (1+ n)))))
+
+(defun chrome-server--handle-client-hello (payload)
+  "Built-in CLIENT_HELLO handler.
+Renames the entry for the websocket currently being dispatched to
+the client name announced in PAYLOAD, with a -N suffix appended if
+the name is already taken by a different websocket."
+  (let ((ws       chrome-server--current-ws)
+        (requested (plist-get payload :client)))
+    (unless ws
+      (error "CLIENT_HELLO invoked outside a request dispatch"))
+    (unless (and (stringp requested) (not (string-empty-p requested)))
+      (error "CLIENT_HELLO requires payload.client (non-empty string)"))
+    (let* ((final-name (chrome-server--unique-client-name requested ws))
+           (others     (cl-remove-if (lambda (c) (eq (cdr c) ws))
+                                     chrome-server--clients)))
+      (setq chrome-server--clients
+            (cons (cons final-name ws) others))
+      (chrome-server--log "[HELLO] %s (clients=%d)"
+                          final-name (length chrome-server--clients))
+      `((status . "ok")
+        (client . ,final-name)))))
+
+(chrome-server-register-handler "CLIENT_HELLO"
+                                #'chrome-server--handle-client-hello)
+
 ;; ── Async request primitive (Emacs → browser) ────────────────────────────────
 
 (defun chrome-server--cancel-all-pending (reason)
@@ -340,30 +446,38 @@ response payload.  Re-registering overwrites the previous binding."
            (chrome-server--warn "cancellation callback for %s signalled: %s"
                                 id (error-message-string err))))))))
 
-(defun chrome-server-request-async (name payload callback)
+(defun chrome-server-request-async (name payload callback &optional client)
   "Send a request NAME with PAYLOAD to the browser; invoke CALLBACK on response.
 CALLBACK receives the decoded response payload (a plist).  If the
 request times out (`chrome-server-request-timeout' seconds) CALLBACK is
 called with (:status \"error\" :message \"timeout\").  Returns the
-request id, or nil if no client is connected."
-  (let ((ws (car chrome-server--clients)))
-    (cond
-     ((null ws)
-      (chrome-server--warn "no client connected; dropping request %s" name)
-      (funcall callback '(:status "error" :message "no client connected"))
-      nil)
-     (t
-      (let* ((id    (org-id-uuid))
-             (timer (run-at-time chrome-server-request-timeout nil
-                                 #'chrome-server--timeout-request id)))
-        (setq chrome-server--pending-callbacks
-              (cons (cons id (cons callback timer))
-                    chrome-server--pending-callbacks))
-        (chrome-server--send-to ws
-                                `((id      . ,id)
-                                  (name    . ,name)
-                                  (payload . ,(or payload :null))))
-        id)))))
+request id, or nil if no client is connected.
+
+CLIENT, if non-nil, names which connected client to target (e.g.
+\"chrome\", \"firefox\").  When omitted, the request is sent to the
+sole connected client; when more than one is connected, CALLBACK is
+invoked with a status:error payload and nil is returned."
+  (pcase (chrome-server--target-for client name)
+    (`(ok . ,ws)
+     (let* ((id    (org-id-uuid))
+            (timer (run-at-time chrome-server-request-timeout nil
+                                #'chrome-server--timeout-request id)))
+       (setq chrome-server--pending-callbacks
+             (cons (cons id (cons callback timer))
+                   chrome-server--pending-callbacks))
+       (chrome-server--send-to ws
+                               `((id      . ,id)
+                                 (name    . ,name)
+                                 (payload . ,(or payload :null))))
+       id))
+    (`(err . ,msg)
+     (chrome-server--warn "%s" msg)
+     (funcall callback `(:status "error" :message ,msg))
+     nil)
+    (`(none . ,msg)
+     (chrome-server--warn "%s" msg)
+     (funcall callback '(:status "error" :message "no client connected"))
+     nil)))
 
 (defun chrome-server--timeout-request (id)
   "Time out the pending request with ID."
@@ -380,26 +494,39 @@ request id, or nil if no client is connected."
          (chrome-server--warn "timeout callback for %s signalled: %s"
                               id (error-message-string err)))))))
 
-(defun chrome-server-request (name &optional payload)
+(defun chrome-server-request (name &optional payload client)
   "Synchronously send NAME/PAYLOAD to the browser and return the response payload.
 Blocks via `accept-process-output' until the response arrives or the
-timeout elapses.  Signals an error on timeout or when no client is
-connected.  Do NOT use this from inside a websocket callback — it can
-re-enter the dispatcher."
-  (let* ((done nil)
-         (result nil)
-         (id (chrome-server-request-async
-              name payload
-              (lambda (payload)
-                (setq result payload
-                      done   t)))))
-    (unless id (error "No client connected"))
-    (let ((deadline (+ (float-time)
-                       (+ 0.5 chrome-server-request-timeout))))
-      (while (and (not done) (< (float-time) deadline))
-        (accept-process-output nil 0.05)))
-    (unless done (error "Request %s timed out" name))
-    result))
+timeout elapses.  Signals an error on timeout, when no client is
+connected, when more than one client is connected and CLIENT was not
+supplied, or when CLIENT names a client that is not connected.
+Do NOT use this from inside a websocket callback — it can re-enter
+the dispatcher.
+
+CLIENT, if non-nil, names the client to target (e.g. \"chrome\",
+\"firefox\").  See `chrome-server-connected-clients' for the current
+roster."
+  (catch 'chrome-server--result
+    (let ((id (chrome-server-request-async
+               name payload
+               (lambda (response)
+                 (throw 'chrome-server--result response))
+               client)))
+      (unless id
+        ;; Request-async already warned and invoked the callback with a
+        ;; status:error payload, so escalate to an error here too.
+        (error "chrome-server-request: no acceptable target for %s" name))
+      (let ((deadline (+ (float-time)
+                         (+ 0.5 chrome-server-request-timeout))))
+        (cl-labels
+            ((pump ()
+               (cond
+                ((> (float-time) deadline)
+                 (error "Request %s timed out" name))
+                (t
+                 (accept-process-output nil 0.05)
+                 (pump)))))
+          (pump))))))
 
 ;; ── Convenience: respond-fast-then-defer ─────────────────────────────────────
 

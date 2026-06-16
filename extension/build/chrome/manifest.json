@@ -1,16 +1,25 @@
 {
-  "manifest_version": 3,
   "name": "Chrome Server (Emacs bridge)",
   "version": "2.0",
   "description": "Bidirectional WebSocket bridge between Chrome and a running Emacs instance.",
+  "options_ui": {
+    "page": "html/options.html",
+    "open_in_tab": true
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "manifest_version": 3,
   "permissions": [
     "activeTab",
     "contextMenus",
     "notifications",
+    "offscreen",
     "scripting",
     "storage",
     "tabs",
-    "offscreen",
     "userScripts"
   ],
   "host_permissions": [
@@ -19,9 +28,9 @@
     "https://*/*",
     "http://*/*"
   ],
-  "options_ui": {
-    "page": "html/options.html",
-    "open_in_tab": true
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
   },
   "action": {
     "default_popup": "html/popup.html",
@@ -31,15 +40,6 @@
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     }
-  },
-  "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
-  },
-  "background": {
-    "service_worker": "src/background.js",
-    "type": "module"
   },
   "commands": {
     "org-capture": {

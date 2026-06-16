@@ -1,38 +1,12 @@
 {
   "extension": {
-    "manifest_version": 3,
     "name": "Chrome Server (Emacs bridge)",
     "version": "2.0",
     "description": "Bidirectional WebSocket bridge between Chrome and a running Emacs instance.",
 
-    "permissions": [
-      "activeTab",
-      "contextMenus",
-      "notifications",
-      "scripting",
-      "storage",
-      "tabs"
-    ],
-    "host_permissions": [
-      "ws://127.0.0.1:9130/*",
-      "http://127.0.0.1:9130/*",
-      "https://*/*",
-      "http://*/*"
-    ],
-
     "options_ui": {
       "page": "html/options.html",
       "open_in_tab": true
-    },
-
-    "action": {
-      "default_popup": "html/popup.html",
-      "default_title": "Chrome Server",
-      "default_icon": {
-        "16":  "icons/icon16.png",
-        "48":  "icons/icon48.png",
-        "128": "icons/icon128.png"
-      }
     },
 
     "icons": {
@@ -44,17 +18,60 @@
 
   "extensionTargets": {
     "chrome": {
-      "permissions": ["offscreen", "userScripts"],
+      "manifest_version": 3,
+      "permissions": [
+        "activeTab",
+        "contextMenus",
+        "notifications",
+        "offscreen",
+        "scripting",
+        "storage",
+        "tabs",
+        "userScripts"
+      ],
+      "host_permissions": [
+        "ws://127.0.0.1:9130/*",
+        "http://127.0.0.1:9130/*",
+        "https://*/*",
+        "http://*/*"
+      ],
       "background": {
         "service_worker": "src/background.js",
         "type": "module"
+      },
+      "action": {
+        "default_popup": "html/popup.html",
+        "default_title": "Chrome Server",
+        "default_icon": {
+          "16":  "icons/icon16.png",
+          "48":  "icons/icon48.png",
+          "128": "icons/icon128.png"
+        }
       }
     },
     "firefox": {
-      "permissions": ["userScripts"],
+      "manifest_version": 2,
+      "permissions": [
+        "activeTab",
+        "contextMenus",
+        "notifications",
+        "storage",
+        "tabs",
+        "<all_urls>"
+      ],
       "background": {
         "scripts": ["src/background.js"],
+        "type": "module",
         "persistent": true
+      },
+      "browser_action": {
+        "default_popup": "html/popup.html",
+        "default_title": "Chrome Server",
+        "default_icon": {
+          "16":  "icons/icon16.png",
+          "48":  "icons/icon48.png",
+          "128": "icons/icon128.png"
+        }
       },
       "browser_specific_settings": {
         "gecko": {

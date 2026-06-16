@@ -40,6 +40,10 @@
 ;;   :tab-id N — execute in this tab id instead of the active tab.
 ;;   :frames "all" — return the InjectionResult array for every frame
 ;;           the script ran in.  Default: the first frame's value.
+;;   :client NAME — pick which connected browser runs the block when
+;;           more than one is connected (e.g. \"chrome\", \"firefox\").
+;;           With one client connected the block runs there
+;;           automatically and :client may be omitted.
 ;;
 ;; The block's body becomes the JS code passed to
 ;; `chrome.userScripts.execute'.  As with the EVAL_IN_ACTIVE_TAB handler
@@ -86,10 +90,12 @@ PARAMS is the alist of header arguments from the source block."
   (let* ((world    (or (cdr (assq :world  params)) "MAIN"))
          (tab-id   (cdr (assq :tab-id params)))
          (frames   (cdr (assq :frames params)))
+         (client   (cdr (assq :client params)))
          (req-payload (append
                        (list :code body :world world)
                        (when tab-id (list :tabId tab-id))))
-         (response (chrome-server-request "EVAL_IN_ACTIVE_TAB" req-payload))
+         (response (chrome-server-request "EVAL_IN_ACTIVE_TAB"
+                                          req-payload client))
          (status   (plist-get response :status)))
     (unless (equal status "ok")
       (error "chrome-js: %s"

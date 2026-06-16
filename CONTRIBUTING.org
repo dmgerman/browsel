@@ -49,6 +49,15 @@ human-readable line that bubbles up to =*Messages*= and the popup).
 Timeouts: =chrome-server-request-timeout= (default 10s) on the Emacs
 side, 5s on the offscreen-doc side.
 
+*Client identification.*  Every browser issues a =CLIENT_HELLO=
+request as its first frame, with payload ={ client: "chrome" }= or
+={ client: "firefox" }=.  Emacs records the name on the websocket
+and uses it to route Emacs-to-browser requests when more than one
+browser is connected.  Until =CLIENT_HELLO= arrives the connection
+is tracked as =unknown-N=.  If two clients announce the same name a
+=-2=, =-3=, … suffix is appended.  Inspect the current roster with
+=chrome-server-connected-clients=.
+
 ** Request flow
 
 Browser → Emacs (right-click, popup, hotkey, content-script relay):
@@ -252,10 +261,11 @@ in =extension/src/handlers.js= and reference it via =args-shape=.
 
 | Call                                                  | Notes                                                                                  |
 |-------------------------------------------------------+----------------------------------------------------------------------------------------|
-| =(chrome-server-request NAME PAYLOAD)=                | Sync.  Blocks with =accept-process-output=.  Do not call from inside a WS callback.    |
-| =(chrome-server-request-async NAME PAYLOAD CALLBACK)= | Async.  Returns request id.  Always safe.                                              |
-| =(chrome-server-register-handler NAME FN)=            | Register a browser → Emacs handler.  Overwrites on duplicate.                          |
-| =(chrome-server-defer FN &rest ARGS)=                 | Schedule FN to run on the next idle tick — for respond-fast-then-defer.                |
+| =(chrome-server-request NAME PAYLOAD &optional CLIENT)=                | Sync.  Blocks with =accept-process-output=.  Do not call from inside a WS callback.    |
+| =(chrome-server-request-async NAME PAYLOAD CALLBACK &optional CLIENT)= | Async.  Returns request id.  Always safe.                                              |
+| =(chrome-server-register-handler NAME FN)=                             | Register a browser → Emacs handler.  Overwrites on duplicate.                          |
+| =(chrome-server-connected-clients)=                                    | List of currently connected client names (newest first).                               |
+| =(chrome-server-defer FN &rest ARGS)=                                  | Schedule FN to run on the next idle tick — for respond-fast-then-defer.                |
 
 * Extending the Chrome extension side
 

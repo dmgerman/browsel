@@ -30,6 +30,8 @@
 // harmless (we check `expiry > Date.now()` at every gate); they get
 // pruned the next time the popup queries / grants on that tab.
 
+import { executeInTab } from "./executor.js";
+
 const CONSENT_KEY        = "consentByTab";
 const CODE_PREVIEW_CHARS = 800;
 const CONSENT_TIMEOUT_MS = 30000;  // 30s, then treat as deny
@@ -194,20 +196,18 @@ async function askConsent(tabId, fullCode) {
   const preview = fullCode.length > CODE_PREVIEW_CHARS
         ? fullCode.slice(0, CODE_PREVIEW_CHARS) + "\n…"
         : fullCode;
-  let results;
   try {
-    results = await api.scripting.executeScript({
-      target: { tabId },
-      func:   showConsentOverlay,
-      args:   [preview, CONSENT_TIMEOUT_MS],
+    return await executeInTab({
+      tabId,
+      func: showConsentOverlay,
+      args: [preview, CONSENT_TIMEOUT_MS],
     });
   } catch (e) {
     throw new Error(
-      `consent prompt could not be shown (${e.message}); ` +
-      `chrome://, chrome-extension://, and Web Store pages cannot be eval'd`,
+      `consent prompt could not be shown (${e?.message ?? e}); ` +
+      `internal and store-managed pages cannot be evaluated`,
     );
   }
-  return results?.[0]?.result;
 }
 
 // ── Public gate (used by the user-script adapter) ───────────────────────────

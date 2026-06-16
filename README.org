@@ -165,7 +165,7 @@ whichever happens first.
 Its signature is:
 
 #+begin_src emacs-lisp
-(chrome-server-request NAME &optional PAYLOAD)
+(chrome-server-request NAME &optional PAYLOAD CLIENT)
 #+end_src
 
 =NAME= is a string identifying the handler — for example
@@ -173,6 +173,15 @@ Its signature is:
 list the open tabs.  =PAYLOAD= is an optional plist whose keys depend
 on which handler is named; each handler documents the keys it
 recognises.
+
+=CLIENT= is the optional name of a connected browser — currently
+="chrome"= or ="firefox"=.  When only one browser is connected, omit
+=CLIENT= and the request goes to that browser automatically.  When
+more than one is connected, supply =CLIENT= to pick which browser
+runs the request; the function signals an error if =CLIENT= names a
+browser that is not currently connected, and also signals an error
+if more than one browser is connected and =CLIENT= is omitted.  Use
+=chrome-server-connected-clients= to inspect the current roster.
 
 The function returns a plist with two fields you should always check.
 =:status= is the string ="ok"= when the request succeeded and
@@ -214,12 +223,13 @@ calls made from inside another WebSocket callback), use the
 asynchronous variant:
 
 #+begin_src emacs-lisp
-(chrome-server-request-async NAME PAYLOAD CALLBACK)
+(chrome-server-request-async NAME PAYLOAD CALLBACK &optional CLIENT)
 #+end_src
 
 It returns the request id immediately and invokes =CALLBACK= with the
 response plist once the Chrome extension replies.  Unlike the
-synchronous form, it is safe to use from any context.
+synchronous form, it is safe to use from any context.  =CLIENT= has
+the same meaning as in =chrome-server-request=.
 
 ** Minimal example
 
@@ -323,6 +333,20 @@ document.title
 location.origin
 # +end_src
 #+end_example
+
+*Pick a browser when more than one is connected:*
+
+#+begin_example
+# +begin_src chrome-js :client firefox
+navigator.userAgent
+# +end_src
+#+end_example
+
+The =:client= header is the name a browser announced via the
+=CLIENT_HELLO= request when it connected (currently ="chrome"= or
+="firefox"=).  With one browser connected the block runs there
+automatically and =:client= may be omitted; with more than one,
+omitting =:client= signals an error and lists the connected names.
 
 * Querying and controlling the browser from Emacs
 
