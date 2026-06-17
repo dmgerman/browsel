@@ -61,6 +61,7 @@
 (require 'json)
 (require 'org-id)
 (require 'cl-lib)
+(require 'subr-x)
 
 ;; Forward declarations.  These dynamic variables belong to org-capture and
 ;; org-roam, which are not necessarily loaded when this file is byte-compiled.
@@ -73,7 +74,7 @@
 (declare-function org-roam-capture-    "org-roam"    (&rest args))
 (declare-function org-roam-node-create "org-roam"    (&rest args))
 
-(defconst browsel-version "0.87"
+(defconst browsel-version "0.88"
   "Current version of the browsel package.")
 
 ;;;###autoload
@@ -112,6 +113,15 @@ nil means the user selects the template interactively.")
 (defvar browsel-pandoc-executable "pandoc"
   "Path to the pandoc executable used for HTML → org conversion.
 Shared by browsel-www and browsel-chatgpt backends.")
+
+(defvar browsel-max-message-bytes (* 64 1024 1024)
+  "Maximum bytes a single WebSocket message may accumulate to.
+Page-html and ChatGPT-turns payloads are inherently large, so this is
+set high (64 MiB) by default — large enough for any plausible page
+save, low enough that a stuck or hostile sender cannot grow Emacs's
+heap unbounded.  A client whose pending message exceeds this limit is
+disconnected and its accumulator dropped; a fresh connection is
+required to retry.  Set to nil to disable the cap.")
 
 ;; ── State ────────────────────────────────────────────────────────────────────
 
@@ -236,18 +246,37 @@ replace the placeholder with a stable identifier."
 
 ;; ── Dispatch ─────────────────────────────────────────────────────────────────
 
+(defun browsel--drop-client-over-limit (ws combined-len)
+  "Drop WS and its rx accumulator; warn that COMBINED-LEN exceeded the cap.
+Called from `browsel--on-message' when a pending message would push
+the per-client accumulator past `browsel-max-message-bytes'.  The
+accumulator is freed before the close so a stalled close does not
+keep the buffer pinned."
+  (setq browsel--rx-buffers
+        (cl-remove-if (lambda (c) (eq (car c) ws)) browsel--rx-buffers))
+  (browsel--warn
+   "client message exceeded %d bytes (had %d); dropping connection"
+   browsel-max-message-bytes combined-len)
+  (ignore-errors (websocket-close ws)))
+
 (defun browsel--on-message (ws frame)
   "Accumulate FRAME bytes for WS; dispatch once a complete message arrives.
 A WebSocket message may be split across many frames (large payloads such
 as page HTML routinely run into the hundreds of KB).  We keep a per-client
 buffer of frame text and only JSON-parse once the FIN bit is set on the
 final frame.  Frames with a `:name' field are requests; frames with a
-`:requestId' field are responses to Emacs-initiated requests."
+`:requestId' field are responses to Emacs-initiated requests.
+A pending message that would grow past `browsel-max-message-bytes'
+disconnects the client instead of growing the accumulator further."
   (let* ((text       (or (websocket-frame-text frame) ""))
          (complete-p (websocket-frame-completep frame))
          (prior-cell (assq ws browsel--rx-buffers))
          (combined   (concat (cdr prior-cell) text)))
     (cond
+     ;; Over the size cap — disconnect and stop accumulating.
+     ((and browsel-max-message-bytes
+           (> (length combined) browsel-max-message-bytes))
+      (browsel--drop-client-over-limit ws (length combined)))
      ;; Still receiving — stash and wait.
      ((not complete-p)
       (if prior-cell
@@ -617,13 +646,100 @@ Returns an empty string if not set or already consumed."
   (when (eq (plist-get payload :raise) t)
     (select-frame-set-input-focus (selected-frame))))
 
+;; ── Org sanitizers ───────────────────────────────────────────────────────────
+;;
+;; Everything coming off the wire is page-controlled.  Org-mode is a
+;; structured language: a stray `\\n* heading' in a description, a
+;; `]' in a title, or a captured URL with an `elisp:' scheme can all
+;; change the resulting document's meaning — at worst, run elisp when
+;; the user later clicks a captured link.  These helpers escape such
+;; content at the boundary so handlers can splice page strings into
+;; templates and drawers without thinking about it each time.
+
+(defconst browsel--safe-link-schemes
+  '("http" "https" "ftp" "ftps" "mailto" "news")
+  "Schemes accepted by `browsel--make-link'.
+URLs with any other scheme (`elisp:', `shell:', `eshell:', `javascript:',
+…) are rendered as plain text instead of a clickable Org link, so a
+captured page cannot plant a link that runs code if a user later follows
+it.  Add to this list only after weighing what `org-link-parameters'
+does with the scheme in your config.")
+
+(defun browsel--safe-link-url-p (url)
+  "Return non-nil if URL's scheme is in `browsel--safe-link-schemes'."
+  (and (stringp url)
+       (let ((case-fold-search t))
+         (when (string-match "\\`\\([A-Za-z][A-Za-z0-9+.-]*\\):" url)
+           (member (downcase (match-string 1 url))
+                   browsel--safe-link-schemes)))))
+
+(defun browsel--escape-org-link-target (s)
+  "Make S safe to splice as the target of an Org link.
+A literal `]' breaks the link parser; replace with its URL-encoded form."
+  (replace-regexp-in-string "\\]" "%5D" (or s "")))
+
+(defun browsel--escape-org-link-desc (s)
+  "Make S safe to splice as the description of an Org link.
+Collapses newlines (descriptions must be single-line) and replaces the
+bracket characters with curly look-alikes so they cannot close the
+description bracket."
+  (let* ((s (or s ""))
+         (s (replace-regexp-in-string "[\n\r]+" " " s))
+         (s (replace-regexp-in-string "\\]" "}" s))
+         (s (replace-regexp-in-string "\\[" "{" s)))
+    s))
+
+(defun browsel--make-link (url description)
+  "Return `[[URL][DESCRIPTION]]' when URL has a safe scheme.
+Otherwise return a plain-text fallback like `desc (url)' so a captured
+page cannot plant a clickable `elisp:'/`shell:'/`javascript:' link.
+DESCRIPTION defaults to URL if nil or empty."
+  (let* ((url (or url ""))
+         (description (if (and (stringp description)
+                               (not (string-empty-p description)))
+                          description
+                        url)))
+    (if (browsel--safe-link-url-p url)
+        (format "[[%s][%s]]"
+                (browsel--escape-org-link-target url)
+                (browsel--escape-org-link-desc description))
+      (format "%s (%s)"
+              (browsel--escape-org-link-desc description)
+              (browsel--escape-org-link-desc url)))))
+
+(defun browsel--sanitize-org-meta (s)
+  "Sanitize S for a single-line Org metadata context.
+Use for property-drawer values, `#+keyword:' lines, headings.
+Collapses newlines to spaces and replaces `]' with `}' so a value cannot
+terminate a surrounding link or drawer line, or carry a heading break."
+  (let* ((s (or s ""))
+         (s (replace-regexp-in-string "[\n\r]+" " " s))
+         (s (replace-regexp-in-string "\\]" "}" s)))
+    s))
+
+(defun browsel--sanitize-org-body (s)
+  "Sanitize S for multi-line Org body text.
+Indents any line that would otherwise start an Org heading (`*' in
+column 0), a drawer marker (`:NAME:'), or a file-level keyword
+(`#+...'), so structure cannot be injected by a page-controlled
+selection, description, or transcript.  Indented variants of those
+constructs are inert to the Org parser."
+  (replace-regexp-in-string
+   "^\\(\\*+ \\|#\\+\\|:[A-Za-z_-]+:\\)"
+   " \\1"
+   (or s "")))
+
 (defun browsel--capture-initial (payload)
-  "Build the org-capture-initial string from PAYLOAD's url, title, and text."
+  "Build the org-capture-initial string from PAYLOAD's url, title, and text.
+The link is built via `browsel--make-link' (which blocks unsafe schemes)
+and any body text is passed through `browsel--sanitize-org-body' so it
+cannot introduce headings or drawer markers."
   (let* ((url   (plist-get payload :url))
          (title (or (plist-get payload :title) "Web capture"))
          (text  (or (plist-get payload :text) "")))
-    (concat (format "[[%s][%s]]" url title)
-            (unless (string-empty-p text) (concat "\n\n" text)))))
+    (concat (browsel--make-link url title)
+            (unless (string-empty-p text)
+              (concat "\n\n" (browsel--sanitize-org-body text))))))
 
 (defun browsel--store-link-plist (payload)
   "Return an `org-store-link-plist' for PAYLOAD's url and title.
@@ -631,11 +747,15 @@ Drives `%a' (annotation) expansion in org-capture templates so that
 each capture sees the current browser link rather than whatever link
 Emacs happened to store last.  `:annotation' is set explicitly because
 org-capture reads it directly when `org-capture-link-is-already-stored'
-is non-nil."
-  (let* ((url    (plist-get payload :url))
-         (title  (or (plist-get payload :title) "Web capture"))
-         (anno   (format "[[%s][%s]]" url title)))
-    (list :type "http" :link url :description title :annotation anno)))
+is non-nil.  For an unsafe URL scheme the `:link' field is left blank
+(so `%L'/`%l' do not splice a clickable bad link) and `:annotation' is
+the plain-text rendering produced by `browsel--make-link'."
+  (let* ((url   (plist-get payload :url))
+         (title (or (plist-get payload :title) "Web capture")))
+    (list :type "http"
+          :link        (if (browsel--safe-link-url-p url) url "")
+          :description (browsel--escape-org-link-desc title)
+          :annotation  (browsel--make-link url title))))
 
 (defun browsel--require-payload (payload)
   "Signal if PAYLOAD is nil."
@@ -669,14 +789,14 @@ render at librsvg's huge default size in org buffers)."
 Schedules the actual capture and returns immediately (respond-fast-then-defer)."
   (browsel--require-payload payload)
   (browsel-defer #'browsel--org-capture payload)
-  (browsel--ok "Org-capture opened"))
+  (browsel--ok "Org-capture started"))
 
 (defun browsel--handle-org-roam-capture (payload)
   "Handle ORG_ROAM_CAPTURE request with PAYLOAD.
 Schedules the actual capture and returns immediately (respond-fast-then-defer)."
   (browsel--require-payload payload)
   (browsel-defer #'browsel--org-roam-capture payload)
-  (browsel--ok "Org-roam-capture opened"))
+  (browsel--ok "Org-roam-capture started"))
 
 (defun browsel--handle-eww (payload)
   "Handle EWW request with PAYLOAD.
@@ -686,7 +806,7 @@ Schedules the eww invocation and returns immediately
   (unless (plist-get payload :url)
     (error "Missing url in payload"))
   (browsel-defer #'browsel--eww payload)
-  (browsel--ok "Opening in eww"))
+  (browsel--ok "Eww started"))
 
 ;; ── Action implementations ───────────────────────────────────────────────────
 

@@ -90,16 +90,22 @@ Returns the path of the org file written."
                             html-file (error-message-string err))))
     (condition-case err
         (with-temp-file file
-          (insert (format "#+title: %s\n" title))
-          (insert (format "#+source_url: %s\n" url))
+          (insert (format "#+title: %s\n" (browsel--sanitize-org-meta title)))
+          (insert (format "#+source_url: %s\n" (browsel--sanitize-org-meta url)))
           (insert (format "#+created: %s\n\n" (format-time-string "%Y-%m-%d %H:%M:%S")))
-          (insert (format "[[%s][%s]]\n\n" url title))
+          (insert (browsel--make-link url title))
+          (insert "\n\n")
           (insert (condition-case err
+                      ;; Successful pandoc output is rich Org by design — do
+                      ;; not sanitize.  The failure fallback inserts page
+                      ;; HTML/text as-is, which can hide `* heading' lines;
+                      ;; sanitize that path so a captured page cannot break
+                      ;; out into the surrounding document structure.
                       (browsel-www--html-to-org html page-dir)
                     (error
                      (browsel--warn "HTML conversion failed, inserting plain text: %s"
                                           (error-message-string err))
-                     html))))
+                     (browsel--sanitize-org-body html)))))
       (error
        (error "Could not write org file %s: %s"
               file (error-message-string err))))

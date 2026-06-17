@@ -48,6 +48,8 @@
 (require 'browsel)
 (require 'url-util)
 (require 'json)
+(require 'subr-x)
+(require 'seq)
 
 ;; Forward declarations for dynamic vars and functions from org-capture/org.
 (defvar org-capture-templates)
@@ -72,12 +74,27 @@ Obtain one at https://console.cloud.google.com/ and set this variable.")
 
 ;; ── URL helpers ───────────────────────────────────────────────────────────────
 
+(defconst browsel-youtube--id-regexp "[A-Za-z0-9_-]\\{11\\}"
+  "Strict YouTube video-ID shape: 11 chars from the base64url alphabet.
+URL-derived IDs are used as path components, glob fragments, and the
+yt-dlp output template, so anything outside this set has to be rejected
+at the entry point to keep slashes, dots, and globs out of file I/O.")
+
 (defun browsel-youtube--video-id (url)
-  "Return the YouTube video ID from URL, or nil."
-  (cond
-   ((string-match "[?&]v=\\([^&]+\\)" url) (match-string 1 url))
-   ((string-match "youtu\\.be/\\([^?&]+\\)" url) (match-string 1 url))
-   (t nil)))
+  "Return the YouTube video ID from URL, or nil.
+Returns nil unless the extracted value matches
+`browsel-youtube--id-regexp' exactly — `v=../../etc' and similar
+path-shaped strings are rejected rather than threaded into transcript
+directory names or wildcard expansions."
+  (let ((re (concat "\\`" browsel-youtube--id-regexp "\\'")))
+    (cond
+     ((and (string-match "[?&]v=\\([^&]+\\)" url)
+           (string-match-p re (match-string 1 url)))
+      (match-string 1 url))
+     ((and (string-match "youtu\\.be/\\([^?&]+\\)" url)
+           (string-match-p re (match-string 1 url)))
+      (match-string 1 url))
+     (t nil))))
 
 (defun browsel-youtube--sanitize-title (title)
   "Sanitize TITLE for use as a filename component (max 40 chars)."
@@ -151,14 +168,20 @@ Returns empty string if DURATION is nil or empty."
      (t 0))))
 
 (defun browsel-youtube--convert-chapters (description url)
-  "Convert chapter timestamps in DESCRIPTION into org links pointing to URL."
+  "Convert chapter timestamps in DESCRIPTION into org links pointing to URL.
+The chapter label and the surrounding description lines come from a
+page-controlled string; the label is sanitized via
+`browsel--escape-org-link-desc' so it cannot close the link's
+description bracket, and any line in DESCRIPTION not matched as a
+chapter is left to the caller's later body-sanitization pass."
   (let* ((video-id (browsel-youtube--video-id url))
          (base-url (format "https://www.youtube.com/watch?v=%s" video-id)))
     (string-join
      (mapcar (lambda (line)
                (if (string-match "^\\([0-9:]+\\)[ \t]+\\(.*\\)$" line)
                    (let* ((ts      (match-string 1 line))
-                          (label   (match-string 2 line))
+                          (label   (browsel--escape-org-link-desc
+                                    (match-string 2 line)))
                           (seconds (browsel-youtube--timestamp-to-seconds ts)))
                      (format "[[%s&t=%ss][%s %s]]" base-url seconds ts label))
                  line))
@@ -195,9 +218,15 @@ and finally the empty string."
 (defun browsel-youtube--build-entry (url title selection oembed api-info video-id)
   "Build and return an org capture entry string for a YouTube video.
 URL, TITLE, SELECTION, and VIDEO-ID identify and seed the entry.
-OEMBED and API-INFO may be nil if the respective fetch failed."
+OEMBED and API-INFO may be nil if the respective fetch failed.
+All page- or API-controlled strings are sanitized at the splice point:
+single-line metadata (heading, property values) via
+`browsel--sanitize-org-meta', multi-line body (description, selection)
+via `browsel--sanitize-org-body'.  URL goes into `:URL:' raw — it is
+already validated to a YouTube watch URL by `browsel-youtube--video-id'."
   (let* ((title       (browsel-youtube--resolve-title title oembed api-info))
-         (title-clean (replace-regexp-in-string "|" ":" title t t))
+         (title-clean (browsel--sanitize-org-meta
+                       (replace-regexp-in-string "|" ":" title t t)))
          (ytline      (if video-id (format "[[yt:%s]]\n" video-id) ""))
          (snippet     (and api-info (gethash "snippet"        api-info)))
          (details     (and api-info (gethash "contentDetails" api-info)))
@@ -206,28 +235,42 @@ OEMBED and API-INFO may be nil if the respective fetch failed."
          (duration    (browsel-youtube--duration-to-minutes
                        (and details (gethash "duration" details))))
          (date        (and snippet (gethash "publishedAt"          snippet)))
-         (description (browsel-youtube--convert-chapters
-                       (or (and snippet (gethash "description" snippet)) "")
-                       url))
+         (description (browsel-youtube--sanitize-description
+                       (browsel-youtube--convert-chapters
+                        (or (and snippet (gethash "description" snippet)) "")
+                        url)))
          (category    (and snippet (gethash "categoryId"           snippet)))
          (language    (and snippet (gethash "defaultAudioLanguage" snippet)))
          (sel-text    (if (and selection (not (string-empty-p selection)))
-                          (concat "\n" selection "\n") "")))
+                          (concat "\n"
+                                  (browsel--sanitize-org-body selection)
+                                  "\n")
+                        "")))
     (concat "* TODO " title-clean "\n"
             ":PROPERTIES:\n"
             ":URL: "      url "\n"
-            ":LANG: "     (or language "") "\n"
-            ":CATEGORY: " (or category "") "\n"
-            ":LENGTH: "   duration "\n"
-            ":AUTHOR:  "  (or author "") "\n"
-            ":CHANNEL:  " (or author-url "") "\n"
-            ":PDATE: "    (or date "") "\n"
+            ":LANG: "     (browsel--sanitize-org-meta (or language "")) "\n"
+            ":CATEGORY: " (browsel--sanitize-org-meta (or category "")) "\n"
+            ":LENGTH: "   (browsel--sanitize-org-meta duration) "\n"
+            ":AUTHOR:  "  (browsel--sanitize-org-meta (or author "")) "\n"
+            ":CHANNEL:  " (browsel--sanitize-org-meta (or author-url "")) "\n"
+            ":PDATE: "    (browsel--sanitize-org-meta (or date "")) "\n"
             ":END:\n\n"
             ytline
             "\nThe *Description*:\n\n"
             description
             sel-text
             "\n")))
+
+(defun browsel-youtube--sanitize-description (desc)
+  "Sanitize the chapter-converted YouTube description DESC for body splicing.
+`browsel-youtube--convert-chapters' has already produced safe `[[...]]'
+chapter links; non-chapter lines remain page-controlled, so pass them
+through `browsel--sanitize-org-body' to defuse heading/drawer/keyword
+injection without touching the chapter links."
+  (mapconcat #'browsel--sanitize-org-body
+             (split-string desc "\n")
+             "\n"))
 
 ;; ── YOUTUBE handler ───────────────────────────────────────────────────────────
 
@@ -439,11 +482,18 @@ timing tags, join all non-blank lines."
           (push (cons current-ts text) result))))
     (mapconcat
      (lambda (cue)
+       ;; The timestamp shown as the link description is constructed
+       ;; here so it is trusted.  The trailing cue text is page-
+       ;; controlled (a captioner could put `* foo' at column 0 to
+       ;; create a heading); sanitize it through
+       ;; `browsel--sanitize-org-body' before splicing.
        (let* ((ts      (car cue))
               (text    (cdr cue))
               (seconds (browsel-youtube--transcript-vtt-time-to-seconds ts))
               (display (browsel-youtube--transcript-format-timestamp ts)))
-         (format "[[%s&t=%ss][%s]] %s" base-url seconds display text)))
+         (format "[[%s&t=%ss][%s]] %s"
+                 base-url seconds display
+                 (browsel--sanitize-org-body text))))
      (reverse result)
      "\n")))
 
@@ -451,10 +501,11 @@ timing tags, join all non-blank lines."
 
 (defun browsel-youtube--transcript-find-existing-dir (root video-id)
   "Return existing transcript directory for VIDEO-ID under ROOT.
-Returns nil when no matching directory is found."
-  (unless (string= video-id "unknown")
-    (car (seq-filter #'file-directory-p
-                     (file-expand-wildcards (format "%s/*-%s-*" root video-id))))))
+Returns nil when no matching directory is found.  VIDEO-ID is already
+validated by `browsel-youtube--video-id' before reaching this call,
+so it is safe to embed in the wildcard pattern."
+  (car (seq-filter #'file-directory-p
+                   (file-expand-wildcards (format "%s/*-%s-*" root video-id)))))
 
 (defun browsel-youtube--transcript-make-dir (payload info)
   "Create and return the per-transcript directory path for PAYLOAD and INFO."
@@ -462,7 +513,9 @@ Returns nil when no matching directory is found."
          (title    (or (plist-get payload :title)
                        (and info (gethash "title" info))
                        "youtube-transcript"))
-         (video-id (or (browsel-youtube--video-id url) "unknown"))
+         (video-id (or (browsel-youtube--video-id url)
+                       (error "Refusing transcript: %s is not a recognized YouTube watch URL"
+                              url)))
          (root     (expand-file-name browsel-youtube-transcript-dir))
          (conv-dir (or (browsel-youtube--transcript-find-existing-dir root video-id)
                        (expand-file-name
@@ -494,15 +547,21 @@ code that turned out to have no captions."
         (message "No subs for lang=%s; manual=%S auto=%S"
                  lang avail-man avail-auto)
         (with-temp-file file
-          (insert (format "#+title: %s\n" title))
-          (insert (format "#+youtube_url: %s\n" url))
+          (insert (format "#+title: %s\n" (browsel--sanitize-org-meta title)))
+          (insert (format "#+youtube_url: %s\n" (browsel--sanitize-org-meta url)))
           (insert (format "#+created: %s\n\n" (format-time-string "%Y-%m-%d %H:%M:%S")))
-          (insert (format "[[%s][Open in YouTube]]\n\n" url))
-          (insert (format "No transcript available (language: %s).\n" lang))
+          (insert (browsel--make-link url "Open in YouTube"))
+          (insert "\n\n")
+          (insert (format "No transcript available (language: %s).\n"
+                          (browsel--sanitize-org-meta lang)))
           (when avail-man
-            (insert (format "Manual subtitles available: %s\n" (string-join avail-man ", "))))
+            (insert (format "Manual subtitles available: %s\n"
+                            (browsel--sanitize-org-meta
+                             (string-join avail-man ", ")))))
           (when avail-auto
-            (insert (format "Auto captions available: %s\n" (string-join avail-auto ", "))))))
+            (insert (format "Auto captions available: %s\n"
+                            (browsel--sanitize-org-meta
+                             (string-join avail-auto ", ")))))))
     (error
      (browsel--warn "could not write stub: %s"
                           (error-message-string err)))))
@@ -553,9 +612,12 @@ If no transcript is available, writes a stub org file and logs to *Messages*."
               (unless (string= vtt-path vtt-dest)
                 (rename-file vtt-path vtt-dest t))
               (with-temp-file org-file
-                (insert (format "#+title: %s\n" title))
-                (insert (format "#+youtube_url: %s\n" url))
-                (insert (format "#+youtube_lang: %s\n" eff-lang))
+                (insert (format "#+title: %s\n"
+                                (browsel--sanitize-org-meta title)))
+                (insert (format "#+youtube_url: %s\n"
+                                (browsel--sanitize-org-meta url)))
+                (insert (format "#+youtube_lang: %s\n"
+                                (browsel--sanitize-org-meta eff-lang)))
                 (insert (format "#+created: %s\n\n" (format-time-string "%Y-%m-%d %H:%M:%S")))
                 (insert entry)
                 (insert "\n** Transcript\n\n")

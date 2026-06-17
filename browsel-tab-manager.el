@@ -41,6 +41,8 @@
 (require 'browsel)
 (require 'url-parse)
 (require 'cl-lib)
+(require 'subr-x)
+(require 'seq)
 
 ;; ── Configuration ────────────────────────────────────────────────────────────
 

@@ -39,6 +39,8 @@
 ;;; Code:
 
 (require 'browsel)
+(require 'subr-x)
+(require 'seq)
 
 ;; ── Configuration ────────────────────────────────────────────────────────────
 
@@ -134,26 +136,33 @@ User turns: ** heading from first line, remaining lines as body.
   If the first line exceeds 100 characters the heading is truncated with
   ellipsis and the full first line is prepended to the body.
 Assistant turns: plain body text.
-Converts :html via pandoc (extracting images to CONV-DIR); falls back to :text."
-  (let* ((role (plist-get turn :role))
-         (html (plist-get turn :html))
-         (raw  (plist-get turn :text))
-         (body (string-trim
-                (if (and html (not (string-empty-p html)))
-                    (condition-case err
-                        (browsel-chatgpt--html-to-org html conv-dir)
-                      (error
-                       (browsel--warn "HTML conversion failed, using plain text: %s"
-                                            (error-message-string err))
-                       (or raw "")))
-                  (or raw "")))))
+Converts :html via pandoc (extracting images to CONV-DIR); falls back to :text.
+Headings are routed through `browsel--sanitize-org-meta'.  Pandoc output
+is treated as rich Org by design (it produces nested headings, lists,
+links — sanitizing would break the format).  The plain-text fallback
+path is page-controlled and DOES get `browsel--sanitize-org-body' so a
+`* heading' or `:PROPERTIES:' line in the raw text cannot break out."
+  (let* ((role      (plist-get turn :role))
+         (html      (plist-get turn :html))
+         (raw       (plist-get turn :text))
+         (rich-body (and html (not (string-empty-p html))
+                         (condition-case err
+                             (browsel-chatgpt--html-to-org html conv-dir)
+                           (error
+                            (browsel--warn "HTML conversion failed, using plain text: %s"
+                                                 (error-message-string err))
+                            nil))))
+         (body      (string-trim
+                     (or rich-body
+                         (browsel--sanitize-org-body (or raw ""))))))
     (if (string= role "user")
         (let* ((lines      (split-string body "\n" t))
                (first-line (or (car lines) ""))
                (rest       (cdr lines))
-               (heading    (if (> (length first-line) 100)
-                               (concat (substring first-line 0 100) "…")
-                             first-line))
+               (heading    (browsel--sanitize-org-meta
+                            (if (> (length first-line) 100)
+                                (concat (substring first-line 0 100) "…")
+                              first-line)))
                (body-lines (if (> (length first-line) 100)
                                (cons first-line rest)
                              rest)))
@@ -210,12 +219,13 @@ plus any extracted images.  Returns the path of the org file written."
                             html-file (error-message-string err))))
     (condition-case err
         (with-temp-file file
-          (insert (format "#+title: %s\n" title))
-          (insert (format "#+chatgpt_id: %s\n" id))
-          (insert (format "#+chatgpt_url: %s\n" url))
+          (insert (format "#+title: %s\n" (browsel--sanitize-org-meta title)))
+          (insert (format "#+chatgpt_id: %s\n" (browsel--sanitize-org-meta id)))
+          (insert (format "#+chatgpt_url: %s\n" (browsel--sanitize-org-meta url)))
           (insert (format "#+created: %s\n\n" (format-time-string "%Y-%m-%d %H:%M:%S")))
-          (insert (format "[[%s][Open in ChatGPT]]\n\n" url))
-          (insert (format "* %s\n\n" title))
+          (insert (browsel--make-link url "Open in ChatGPT"))
+          (insert "\n\n")
+          (insert (format "* %s\n\n" (browsel--sanitize-org-meta title)))
           (dolist (turn turns)
             (insert (browsel-chatgpt--format-turn turn conv-dir))))
       (error
