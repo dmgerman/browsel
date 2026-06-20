@@ -58,7 +58,7 @@ the short form.
      (require 'browsel-chatgpt)     ; CHATGPT
      (require 'browsel-youtube)     ; YOUTUBE + YOUTUBE_TRANSCRIPT
      (require 'browsel-babel)       ; org-babel browsel-js blocks
-     (require 'browsel-tab-manager) ; M-x browsel-tab-manager-jump-to-tab
+     (require 'browsel-tab-manager) ; M-x browsel-tab-manager
      (browsel-start))
    #+end_src
 
@@ -99,13 +99,13 @@ does not, click *Reconnect*.
 
 ** In Emacs
 
-- =M-x browsel-tab-manager-jump-to-tab= — select open tab 
+- =M-x browsel-tab-manager= — select open tab 
   (ordered in most-recently-used first).
 - Org-Babel =browsel-js= source blocks that run JavaScript in the
   active tab and return the value into the org buffer.
 - An elisp API to query and control the browser: list tabs, focus,
   open, close, evaluate JS with a return value. See the code of
-  ~browsel-tab-manager-jump-to-tab~ to see how to use it.
+  ~browsel-tab-manager~ to see how to use it.
 
 ** Extensibility
 
@@ -191,19 +191,45 @@ keys and response shape are documented in =CONTRIBUTING.org=.
 
 ** Jump to a tab
 
-=M-x browsel-tab-manager-jump-to-tab= lists every open tab, sorted
-by =:lastAccessed= descending, and focuses the pick.  The prefix
-marks active (a), sound (s), incognito (i); space when unset.
+=M-x browsel-tab-manager= lists every open tab and
+focuses the pick.  Each row shows three columns: a flag prefix
+(=a=ctive, =s=ound, =i=ncognito; space when unset), the URL host,
+and the page title — each carries its own face so they read as
+distinct columns.
 
 #+begin_example
-[a  ] Inbox (28) - xyz@gmail.com - Gmail — mail.google.com
-[ s ] 2026 F1 Barcelona GP race analysis - YouTube — www.youtube.com
-[  i] Search results — duckduckgo.com
-[   ] GitHub - dmgerman/browsel — github.com
+[a  ] mail.google.com                 Inbox (28) - xyz@gmail.com
+[ s ] www.youtube.com                 2026 F1 Barcelona GP race analysis
+[  i] duckduckgo.com                  Search results
+[   ] github.com                      GitHub - dmgerman/browsel
 #+end_example
 
-With one browser connected it targets that one.  With two, pick the
-target with =M-x browsel-tab-manager-set-client= (=C-u= resets).
+In-prompt action keys:
+
+| Key     | Action                                                                   |
+|---------+--------------------------------------------------------------------------|
+| =?=     | help buffer with the legend and the bindings below                       |
+| =RET=   | focus the highlighted candidate's tab and window, then exit              |
+| =M-RET= | show the highlighted tab in its browser window; stay in the prompt, Emacs keeps focus |
+| =M-k=   | close the highlighted candidate's tab (see =browsel-tab-manager-confirm-close=) |
+| =C-c c= | copy the highlighted candidate's URL to the kill ring, stay in the prompt|
+| =C-t=   | cycle the sort order: =mru= → =title= → =domain= → =window=              |
+
+Sort and typed-text are preserved across =M-k= and =C-t= — both
+re-fetch =GET_ALL_TABS= and re-enter the prompt with the same
+filter, so a chain of =M-k= presses with no typed text walks down
+the list cleanly.
+
+=M-x browsel-tab-manager-close-duplicates= sweeps duplicate tabs
+in one shot.  Two tabs are duplicates when their URLs match after
+stripping any =#fragment=; query parameters (=?id=1=) are kept
+distinct.  Pinned tabs are skipped.  The most-recently-accessed
+tab in each duplicate group is kept; the rest are closed after a
+=yes-or-no-p= confirmation showing the count.
+
+With one browser connected the tab manager targets that one.  With
+two, pick the target with =M-x browsel-tab-manager-set-client=
+(=C-u= resets).
 
 * Run JavaScript in any tab from Emacs
 
@@ -465,7 +491,7 @@ to the correct location:
   (require 'browsel-chatgpt)     ; CHATGPT          (save conversation)
   (require 'browsel-youtube)     ; YOUTUBE + YOUTUBE_TRANSCRIPT
   (require 'browsel-babel)       ; org-babel browsel-js blocks
-  (require 'browsel-tab-manager) ; M-x browsel-tab-manager-jump-to-tab
+  (require 'browsel-tab-manager) ; M-x browsel-tab-manager
   (browsel-start))
 #+end_src
 
@@ -486,6 +512,9 @@ Configuration variables for paths, output locations, and credentials
 | =browsel-youtube-api-key=         | YouTube Data API v3 key (for video metadata)  |
 | =browsel-org-capture-key=         | org-capture template key for browser captures |
 | =browsel-tab-manager-client=      | preferred client when both browsers connected |
+| =browsel-tab-manager-sort=        | initial sort for jump-to-tab (default =mru=, cycle with =C-t=) |
+| =browsel-tab-manager-domain-column-width= | width of the domain column in jump-to-tab    |
+| =browsel-tab-manager-confirm-close= | when non-nil, =M-k= prompts before closing a tab |
 
 The full list is in =CONTRIBUTING.org=.
 
