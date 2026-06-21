@@ -99,8 +99,30 @@ does not, click *Reconnect*.
 
 ** In Emacs
 
-- =M-x browsel-tab-manager= — select open tab 
+- =M-x browsel-tab-manager= — select open tab
   (ordered in most-recently-used first).
+- =M-x browsel-org-link= — insert an Org link to the active
+  browser tab at point.
+- =M-x browsel-selection= — insert the current text selection
+  from the active browser tab at point.
+- =M-x browsel-scroll-page= — scroll the active tab one viewport
+  down; numeric prefix scrolls N pages (negative = back); bare =C-u=
+  scrolls one page back.
+- =M-x browsel-video-toggle-play= — toggle play/pause on the first
+  =<video>= element in the active tab.
+- =M-x browsel-video-advance= — seek the first =<video>= forward by
+  5 seconds; numeric prefix sets a different N (negative = back);
+  bare =C-u= seeks 5 seconds back.
+- =M-x browsel-video-current-time= — insert the current playback
+  time of the first =<video>= as =H:MM:SS= / =M:SS= / =S= (leading
+  zero components dropped).
+- =M-x browsel-youtube-org-link= — insert an Org link to the
+  active YouTube tab at its current playback time (=&t=Ns= in the
+  URL, =title @ timestamp= as the description); errors if the tab
+  is not on youtube.com / youtu.be or has no video element.
+- =M-x browsel-set-default-client= — when both browsers are
+  connected, pick which one interactive commands address; =C-u=
+  clears the setting.
 - Org-Babel =browsel-js= source blocks that run JavaScript in the
   active tab and return the value into the org buffer.
 - An elisp API to query and control the browser: list tabs, focus,
@@ -189,6 +211,61 @@ keys and response shape are documented in =CONTRIBUTING.org=.
 (browsel-request "OPEN_TAB" '(:url "https://example.com"))
 #+end_src
 
+** Quick helpers
+
+Three convenience commands wrap the most common
+"grab-from-the-active-tab" operations.  Each does double duty:
+called interactively it inserts the result at point and returns
+nil; called from Lisp it returns the value as a string and inserts
+nothing.
+
+| Command                       | Interactive use                              | Lisp return value                       |
+|-------------------------------+----------------------------------------------+-----------------------------------------|
+| =browsel-org-link=     | inserts =[[URL][TITLE]]= for the active tab at point | the link string                        |
+| =browsel-selection=    | inserts the active tab's selected text at point | the selection (empty string when none) |
+| =browsel-scroll-page=         | scrolls the active tab one viewport (sign-honored numeric prefix; bare =C-u= = back) | nil (the eval response)                |
+| =browsel-video-toggle-play=   | toggles play/pause on the first =<video>= element | interactive only                        |
+| =browsel-video-advance=       | seeks the first =<video>= by 5 seconds (numeric prefix N; bare =C-u= = back) | interactive only                        |
+| =browsel-video-current-time=  | inserts the first =<video>='s current time (=H:MM:SS= / =M:SS= / =S=) | the timestamp string                    |
+| =browsel-youtube-org-link= | inserts =[[URL&t=Ns][TITLE @ TIMESTAMP]]= for the active YouTube tab | the link string                         |
+
+Lisp examples:
+
+#+begin_src emacs-lisp
+;; Build an org link for whatever is in the active tab.
+(let ((link (browsel-org-link)))
+  ...)
+
+;; Read the user's current page selection.
+(let ((quote (browsel-selection)))
+  ...)
+
+;; Programmatic scroll, three pages down.
+(browsel-scroll-page 3)
+#+end_src
+
+When two browsers are connected, the helpers (and =browsel-tab-manager=)
+use =browsel-default-client= as the default.  Set it once in your
+config or change it interactively:
+
+#+begin_src emacs-lisp
+;; permanent config
+(setq browsel-default-client "chrome")
+#+end_src
+
+Or =M-x browsel-set-default-client= to pick the active browser for
+the rest of the session (=C-u= clears the setting).  If no default
+is set and a multi-client command runs, the first prompt's answer
+is remembered for subsequent commands in the session.
+
+Programmatic Lisp callers can still talk to either browser at any
+time by passing the client name explicitly:
+
+#+begin_src emacs-lisp
+(browsel-org-link "firefox")
+(browsel-request "GET_ALL_TABS" nil "chrome")
+#+end_src
+
 ** Jump to a tab
 
 =M-x browsel-tab-manager= lists every open tab and
@@ -227,9 +304,12 @@ distinct.  Pinned tabs are skipped.  The most-recently-accessed
 tab in each duplicate group is kept; the rest are closed after a
 =yes-or-no-p= confirmation showing the count.
 
-With one browser connected the tab manager targets that one.  With
-two, pick the target with =M-x browsel-tab-manager-set-client=
-(=C-u= resets).
+With one browser connected the tab manager targets that one.
+With two connected, set =browsel-default-client= in your config —
+or change it mid-session with =M-x browsel-set-default-client=
+(prefix arg clears it).  The interactive model is one browser at
+a time; programmatic callers can still pass an explicit CLIENT to
+the helpers to talk to either.
 
 * Run JavaScript in any tab from Emacs
 
@@ -511,7 +591,7 @@ Configuration variables for paths, output locations, and credentials
 | =browsel-youtube-transcript-dir=  | where transcripts are written                 |
 | =browsel-youtube-api-key=         | YouTube Data API v3 key (for video metadata)  |
 | =browsel-org-capture-key=         | org-capture template key for browser captures |
-| =browsel-tab-manager-client=      | preferred client when both browsers connected |
+| =browsel-default-client=          | default browser client for every browsel command |
 | =browsel-tab-manager-sort=        | initial sort for jump-to-tab (default =mru=, cycle with =C-t=) |
 | =browsel-tab-manager-domain-column-width= | width of the domain column in jump-to-tab    |
 | =browsel-tab-manager-confirm-close= | when non-nil, =M-k= prompts before closing a tab |

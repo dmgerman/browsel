@@ -104,6 +104,26 @@ from Lisp the return value is always the version string."
   "Org-capture template key used by the ORG_CAPTURE handler.
 nil means the user selects the template interactively.")
 
+(defcustom browsel-default-client nil
+  "Name of the connected browsel client to address by default.
+Either nil (each browsel command auto-detects: the sole connected
+client when only one is connected, prompt-or-error when more than
+one) or one of the strings returned by `browsel-connected-clients'
+— typically \"chrome\" or \"firefox\".
+
+This is the single user-wide default used by every browsel
+command that needs to pick a client (insert-org-link,
+insert-selection, scroll-page, tab-manager, …).  Set once in
+your config and the multi-client prompt disappears.  Change it
+mid-session with `M-x browsel-set-default-client' (prefix arg
+clears it back to nil).  The assumption is that interactive use
+targets one browser at a time; programmatic callers can still
+talk to either browser by passing an explicit CLIENT to the
+helpers."
+  :type '(choice (const  :tag "Auto / prompt on ambiguity" nil)
+                 (string :tag "Client name"))
+  :group 'browsel)
+
 (defvar browsel-request-timeout 10
   "Seconds to wait for a response to an Emacs-initiated request before timing out.")
 
@@ -850,6 +870,242 @@ Uses `browsel-org-capture-key' if set, otherwise prompts interactively."
 (browsel-register-handler "ORG_CAPTURE"      #'browsel--handle-org-capture)
 (browsel-register-handler "ORG_ROAM_CAPTURE" #'browsel--handle-org-roam-capture)
 (browsel-register-handler "EWW"              #'browsel--handle-eww)
+
+;; ── Emacs-side quick helpers ────────────────────────────────────────────────
+;;
+;; Small commands that grab something from the active browser tab and
+;; either insert it at point (interactive call) or return it as a
+;; string (Lisp call).  CLIENT, when non-nil, names the connected
+;; client; nil delegates the choice to `browsel-request' (which uses
+;; the sole connected client or signals if more than one is
+;; connected).
+
+;;;###autoload
+(defun browsel-set-default-client (&optional client)
+  "Set `browsel-default-client' to CLIENT.
+With a prefix argument, clear the setting back to nil without
+prompting (subsequent commands fall back to auto-detection /
+prompt-on-ambiguity).  Interactively, prompts via `completing-read'
+over the currently-connected clients; defaults to the existing
+value when it is still connected, otherwise to the first
+connected client.
+
+The model is: interactive use targets one browser at a time —
+this command picks which one.  Programmatic callers can still
+talk to either browser concurrently by passing an explicit
+CLIENT argument to `browsel-request' or any of the helpers."
+  (interactive
+   (list
+    (if current-prefix-arg
+        nil
+      (let ((connected (browsel-connected-clients)))
+        (unless connected
+          (user-error "browsel: no client connected"))
+        (completing-read
+         (format "Default browser (%s): "
+                 (mapconcat #'identity connected ", "))
+         connected nil t nil nil
+         (or (and (member browsel-default-client connected)
+                  browsel-default-client)
+             (car connected)))))))
+  (setq browsel-default-client client)
+  (message "browsel-default-client = %S" client))
+
+(defun browsel--read-client-interactive ()
+  "Return a connected browsel client name for an interactive command.
+Resolution order:
+  1. `browsel-default-client' when it names a currently-connected
+     client.
+  2. The sole connected client when only one is connected.
+  3. A `completing-read' over the connected clients when more than
+     one is connected — and the chosen value is stored into
+     `browsel-default-client' so subsequent commands stop asking.
+     The setting survives for the rest of the Emacs session; put a
+     `setq' in your config to make it permanent.
+Signals `user-error' when no client is connected.  Lisp callers
+that want the same behavior can call this directly; the bare-Lisp
+path (passing CLIENT=nil to a helper) still delegates to
+`browsel-request' and errors on ambiguous multi-client state."
+  (let ((connected (browsel-connected-clients)))
+    (cond
+     ((null connected)
+      (user-error "browsel: no client connected"))
+     ((and browsel-default-client
+           (member browsel-default-client connected))
+      browsel-default-client)
+     ((= 1 (length connected))
+      (car connected))
+     (t
+      (let ((chosen
+             (completing-read
+              (format "Browser (%s): "
+                      (mapconcat #'identity connected ", "))
+              connected nil t nil nil
+              (car connected))))
+        ;; Remember for the rest of this Emacs session so the user
+        ;; isn't asked again every time a browsel command runs.
+        (setq browsel-default-client chosen)
+        chosen)))))
+
+(defun browsel--active-tab (&optional client)
+  "Return the active tab plist from CLIENT, or signal if none."
+  (let ((tab (car (browsel-request "GET_ACTIVE_TAB" nil client))))
+    (unless tab
+      (error "browsel: no active tab"))
+    tab))
+
+(defun browsel--eval-active (code &optional client)
+  "Run CODE in the active tab of CLIENT and return its result value.
+Unwraps the standard `EVAL_IN_ACTIVE_TAB' response shape."
+  (let ((resp (browsel-request "EVAL_IN_ACTIVE_TAB"
+                               (list :code code) client)))
+    (plist-get (car (plist-get resp :result)) :result)))
+
+;;;###autoload
+(defun browsel-org-link (&optional client)
+  "Insert (or return) an Org link to the active browser tab.
+The link is `[[URL][TITLE]]' built via `browsel--make-link', so
+unsafe schemes (elisp:, javascript:, …) fall back to a plain-text
+rendering.  When called interactively the link is inserted at point
+and the return value is nil; when called from Lisp the link string
+is returned.  CLIENT, when non-nil, names the connected browsel
+client; interactively the command prompts when more than one client
+is connected."
+  (interactive (list (browsel--read-client-interactive)))
+  (let* ((tab   (browsel--active-tab client))
+         (url   (plist-get tab :url))
+         (title (or (plist-get tab :title) url))
+         (link  (browsel--make-link url title)))
+    (if (called-interactively-p 'any)
+        (progn (insert link) nil)
+      link)))
+
+;;;###autoload
+(defun browsel-selection (&optional client)
+  "Insert (or return) the active tab's current text selection.
+When called interactively, the selection text is inserted at point
+and the return value is nil; when called from Lisp the selection
+string is returned (empty string when nothing is selected).
+CLIENT, when non-nil, names the connected browsel client;
+interactively the command prompts when more than one client is
+connected."
+  (interactive (list (browsel--read-client-interactive)))
+  (let* ((raw  (browsel--eval-active
+                "window.getSelection().toString()" client))
+         (text (or raw "")))
+    (if (called-interactively-p 'any)
+        (progn (insert text) nil)
+      text)))
+
+(defun browsel--format-time-hms (total-seconds)
+  "Format TOTAL-SECONDS as `H:MM:SS' / `M:SS' / `S'.
+Drops leading zero components — sub-hour timestamps come back as
+`M:SS', sub-minute timestamps as `S' (no leading zero).  TOTAL-SECONDS
+is truncated to an integer (so 12.7 → 12).  Negative inputs clamp
+to zero."
+  (let* ((n (max 0 (truncate total-seconds)))
+         (h (/ n 3600))
+         (m (% (/ n 60) 60))
+         (s (% n 60)))
+    (cond
+     ((> h 0) (format "%d:%02d:%02d" h m s))
+     ((> m 0) (format "%d:%02d" m s))
+     (t       (format "%d" s)))))
+
+;;;###autoload
+(defun browsel-video-current-time (&optional client)
+  "Insert (or return) the first `<video>' element's current time.
+Format is `H:MM:SS' for an hour or more, `M:SS' for sub-hour, and a
+bare `S' for sub-minute (see `browsel--format-time-hms').  When
+called interactively the timestamp is inserted at point and nil is
+returned; from Lisp the string is returned.  Signals `user-error'
+if the active tab has no video element.  CLIENT, when non-nil,
+names the connected browsel client; interactively the command
+prompts when more than one client is connected."
+  (interactive (list (browsel--read-client-interactive)))
+  (let* ((code "(() => { const v = document.querySelector('video');
+                         return v ? v.currentTime : null; })()")
+         (seconds (browsel--eval-active code client)))
+    (unless (numberp seconds)
+      (user-error "browsel: no video on this page"))
+    (let ((str (browsel--format-time-hms seconds)))
+      (if (called-interactively-p 'any)
+          (progn (insert str) nil)
+        str))))
+
+;;;###autoload
+(defun browsel-video-toggle-play (&optional client)
+  "Toggle play / pause on the first `<video>' in the active tab.
+Plays if the video is paused, pauses if it is playing.  Messages the
+new state in the echo area.  Errors with a short message if the page
+has no video element.  CLIENT, when non-nil, names the connected
+browsel client; interactively the command prompts when more than
+one client is connected."
+  (interactive (list (browsel--read-client-interactive)))
+  (let* ((code
+          "(() => {
+             const v = document.querySelector('video');
+             if (!v) return { ok: false, reason: 'no video on this page' };
+             if (v.paused) { v.play(); return { ok: true, state: 'playing' }; }
+             v.pause(); return { ok: true, state: 'paused' };
+           })()")
+         (result (browsel--eval-active code client)))
+    (unless (plist-get result :ok)
+      (user-error "browsel: %s"
+                  (or (plist-get result :reason) "unknown")))
+    (message "Video %s" (plist-get result :state))))
+
+;;;###autoload
+(defun browsel-video-advance (&optional arg client)
+  "Advance the first `<video>' in the active tab by ARG seconds.
+Default is 5 seconds forward.  A numeric prefix N seeks N seconds
+\(sign honored — negative goes back).  A bare `C-u' or
+`\\[negative-argument]' seeks 5 seconds back.  Errors with a short
+message if the page has no video element.  CLIENT, when non-nil,
+names the connected browsel client; interactively the command
+prompts when more than one client is connected."
+  (interactive (list current-prefix-arg
+                     (browsel--read-client-interactive)))
+  (let* ((seconds (cond
+                   ((null arg) 5)
+                   ((numberp arg) arg)
+                   (t -5)))
+         (code (format
+                "(() => {
+                   const v = document.querySelector('video');
+                   if (!v) return { ok: false, reason: 'no video on this page' };
+                   v.currentTime = Math.max(0, v.currentTime + (%d));
+                   return { ok: true, currentTime: v.currentTime };
+                 })()"
+                seconds))
+         (result (browsel--eval-active code client)))
+    (unless (plist-get result :ok)
+      (user-error "browsel: %s"
+                  (or (plist-get result :reason) "unknown")))
+    (message "Video at %.1fs" (plist-get result :currentTime))))
+
+;;;###autoload
+(defun browsel-scroll-page (&optional arg client)
+  "Scroll the active browser tab by ARG viewport heights.
+With no prefix: scroll one page forward.  A numeric prefix N scrolls
+N pages (sign honored — positive forward, negative back).  A bare
+`C-u' or `\\[negative-argument]' scrolls one page back — these
+non-numeric prefixes invert direction with magnitude 1, since they
+do not encode a page count themselves.  CLIENT, when non-nil, names
+the connected browsel client; interactively the command prompts
+when more than one client is connected."
+  (interactive (list current-prefix-arg
+                     (browsel--read-client-interactive)))
+  (let* ((n (cond
+             ((null arg) 1)
+             ((numberp arg) arg)
+             (t -1)))
+         (code (format
+                "window.scrollBy({top: (%d) * window.innerHeight, left: 0, behavior: 'smooth'})"
+                n)))
+    (browsel--eval-active code client)
+    (when (called-interactively-p 'any)
+      (message "Scrolled %d page%s" n (if (= (abs n) 1) "" "s")))))
 
 (provide 'browsel)
 

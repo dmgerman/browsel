@@ -634,6 +634,51 @@ If no transcript is available, writes a stub org file and logs to *Messages*."
 (browsel-register-handler "YOUTUBE"             #'browsel-youtube--handle-youtube)
 (browsel-register-handler "YOUTUBE_TRANSCRIPT"  #'browsel-youtube--handle-transcript)
 
+;; ── Emacs-side helpers ──────────────────────────────────────────────────────
+
+(defun browsel-youtube--url-with-timestamp (url seconds)
+  "Return URL with any existing `t=' query stripped and `&t=Ns' appended.
+SECONDS is truncated to an integer.  The separator (`?' vs `&') is
+chosen based on whether the stripped URL still carries a query
+string, so the result is always a well-formed URL."
+  (let* ((clean (replace-regexp-in-string "[?&]t=[^&]*" "" url))
+         (sep   (if (string-match-p "\\?" clean) "&" "?")))
+    (format "%s%st=%ds" clean sep (truncate seconds))))
+
+;;;###autoload
+(defun browsel-youtube-org-link (&optional client)
+  "Insert (or return) an Org link to the active YouTube tab at its current time.
+The URL carries a `&t=Ns' parameter so clicking the link resumes
+playback at the captured time, and the description appends the
+`H:MM:SS' / `M:SS' / `S' timestamp so a reader sees the time
+without following the link.  Signals `user-error' when the active
+tab is not on youtube.com / youtu.be, or when the page has no
+video element.  When called interactively the link is inserted at
+point and nil is returned; from Lisp the link string is returned.
+CLIENT, when non-nil, names the connected browsel client;
+interactively the command prompts when more than one client is
+connected."
+  (interactive (list (browsel--read-client-interactive)))
+  (let* ((tab   (browsel--active-tab client))
+         (url   (plist-get tab :url))
+         (title (or (plist-get tab :title) url)))
+    (unless (and url (string-match-p
+                      "\\`https?://\\(www\\.\\)?\\(youtube\\.com\\|youtu\\.be\\)"
+                      url))
+      (user-error "browsel: active tab is not on YouTube"))
+    (let* ((code "(() => { const v = document.querySelector('video');
+                            return v ? v.currentTime : null; })()")
+           (seconds (browsel--eval-active code client)))
+      (unless (numberp seconds)
+        (user-error "browsel: no video element on the active YouTube tab"))
+      (let* ((ts-url  (browsel-youtube--url-with-timestamp url seconds))
+             (ts-str  (browsel--format-time-hms seconds))
+             (desc    (format "%s @ %s" title ts-str))
+             (link    (browsel--make-link ts-url desc)))
+        (if (called-interactively-p 'any)
+            (progn (insert link) nil)
+          link)))))
+
 (provide 'browsel-youtube)
 
 ;;; browsel-youtube.el ends here

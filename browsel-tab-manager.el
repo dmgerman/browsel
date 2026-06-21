@@ -50,12 +50,14 @@
 ;;     recently-accessed tab in each duplicate group is kept.
 ;;     Confirms with a count before closing anything.
 ;;
-;;   `browsel-tab-manager-set-client'
-;;     Choose which connected client (e.g. "chrome", "firefox")
-;;     this module addresses when more than one is connected.
+;; Which connected client (chrome / firefox) the tab manager
+;; addresses is the same default the rest of browsel uses — set
+;; `browsel-default-client' in `browsel.el' once and every command
+;; honours it.  With several clients connected and no default set,
+;; the resolver prompts.
 ;;
-;; User-tunable variables: `browsel-tab-manager-client',
-;; `browsel-tab-manager-sort', `browsel-tab-manager-confirm-close',
+;; User-tunable variables: `browsel-tab-manager-sort',
+;; `browsel-tab-manager-confirm-close',
 ;; `browsel-tab-manager-domain-column-width'.  Faces:
 ;; `browsel-tab-manager-flags-face', `-domain-face', `-title-face'.
 
@@ -68,17 +70,6 @@
 (require 'seq)
 
 ;; ── Configuration ────────────────────────────────────────────────────────────
-
-(defcustom browsel-tab-manager-client nil
-  "Name of the connected browsel client this module addresses.
-Either nil (the module uses the sole connected client and errors
-when more than one is connected) or one of the strings returned by
-`browsel-connected-clients' — typically \"chrome\" or \"firefox\".
-
-Set this interactively via `browsel-tab-manager-set-client'."
-  :type '(choice (const  :tag "Use sole connected client" nil)
-                 (string :tag "Client name"))
-  :group 'browsel)
 
 (defcustom browsel-tab-manager-domain-column-width 30
   "Width of the domain column in jump-to-tab completion candidates.
@@ -129,56 +120,6 @@ its own count-based confirmation."
   '((t :inherit default))
   "Face for the title column in jump-to-tab candidates."
   :group 'browsel)
-
-;; ── Client selection ────────────────────────────────────────────────────────
-
-;;;###autoload
-(defun browsel-tab-manager-set-client (&optional client)
-  "Set `browsel-tab-manager-client' to CLIENT.
-Interactively, prompt with `completing-read' over the currently
-connected clients.  With a prefix argument, clear the setting (back
-to nil) without prompting."
-  (interactive
-   (list
-    (if current-prefix-arg
-        nil
-      (let ((connected (browsel-connected-clients)))
-        (unless connected
-          (user-error "No browsel client connected"))
-        (completing-read
-         (format "browsel client (%s): "
-                 (mapconcat #'identity connected ", "))
-         connected nil t nil nil
-         (or browsel-tab-manager-client (car connected)))))))
-  (setq browsel-tab-manager-client client)
-  (message "browsel-tab-manager-client = %S" client))
-
-(defun browsel-tab-manager--resolve-client ()
-  "Return the client name to address.
-Uses `browsel-tab-manager-client' when it names a currently connected
-client; otherwise returns the sole connected client.  Signals a
-`user-error' when no client is connected, or when more than one is
-connected and `browsel-tab-manager-client' is unset or stale."
-  (let ((connected (browsel-connected-clients)))
-    (cond
-     ((null connected)
-      (user-error "browsel-tab-manager: no client connected"))
-     ((and browsel-tab-manager-client
-           (member browsel-tab-manager-client connected))
-      browsel-tab-manager-client)
-     ((= 1 (length connected))
-      (car connected))
-     (browsel-tab-manager-client
-      (user-error
-       "browsel-tab-manager-client=%S is not connected (connected: %s); \
-run M-x browsel-tab-manager-set-client"
-       browsel-tab-manager-client
-       (mapconcat #'identity connected ", ")))
-     (t
-      (user-error
-       "%d clients connected (%s); \
-run M-x browsel-tab-manager-set-client to pick one"
-       (length connected) (mapconcat #'identity connected ", "))))))
 
 ;; ── Candidate building ──────────────────────────────────────────────────────
 
@@ -333,7 +274,7 @@ Note: `chrome.tabs.remove' bypasses any in-page `beforeunload' prompt
 \(those only fire from user-initiated UI closes\); pages with unsaved
 form state close without a dialog.  Firefox behaves the same way."
   (interactive)
-  (let* ((client  (browsel-tab-manager--resolve-client))
+  (let* ((client  (browsel--read-client-interactive))
          (tabs    (browsel-request "GET_ALL_TABS" nil client))
          (victims (browsel-tab-manager--duplicate-victims tabs))
          (n       (length victims)))
@@ -682,7 +623,7 @@ keyword and that contains a `:sort' key our sort cycle recognizes."
 (defun browsel-tab-manager ()
   "Focus a tab in the connected browser, picked via completion.
 Lists every open tab from the resolved client (see
-`browsel-tab-manager-client' and `browsel-tab-manager-set-client').
+`browsel-default-client').
 The initial sort order comes from `browsel-tab-manager-sort'
 \(default `mru'); use `C-t' inside the prompt to cycle through
 mru / title / domain / window orders.  RET focuses the chosen tab
@@ -695,7 +636,7 @@ In-prompt keys (see also `?' inside the prompt):
   M-RET   show the highlighted tab in Chrome without raising its window
   C-t     cycle the sort order"
   (interactive)
-  (browsel-tab-manager--run-prompt (browsel-tab-manager--resolve-client)
+  (browsel-tab-manager--run-prompt (browsel--read-client-interactive)
                                    browsel-tab-manager-sort))
 
 (provide 'browsel-tab-manager)
