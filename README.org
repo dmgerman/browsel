@@ -3,7 +3,7 @@
 
 #+attr_org: :width 240
 #+attr_html: :width 240 :align center
-[[file:doc/browsel-logo.png]]
+[[file:doc/browsel-icon.png]]
 
 =browsel= is a module that allows Emacs and a Web browser to
 communicate with each other, in both directions.  Right-click on a
