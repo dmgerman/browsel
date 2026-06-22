@@ -59,6 +59,7 @@ the short form.
      (require 'browsel-youtube)     ; YOUTUBE + YOUTUBE_TRANSCRIPT
      (require 'browsel-babel)       ; org-babel browsel-js blocks
      (require 'browsel-tab-manager) ; M-x browsel-tab-manager
+     (require 'browsel-url-handler) ; browsel-browse-url + browsel-url-routes
      (browsel-start))
    #+end_src
 
@@ -123,6 +124,10 @@ does not, click *Reconnect*.
 - =M-x browsel-set-default-client= — when both browsers are
   connected, pick which one interactive commands address; =C-u=
   clears the setting.
+- =M-x browsel-browse-url= (or set =browse-url-browser-function=
+  to it) — route a URL to a browser via the bridge; honors per-URL
+  rules in =browsel-url-routes= and focuses an already-open tab
+  instead of duplicating it.
 - Org-Babel =browsel-js= source blocks that run JavaScript in the
   active tab and return the value into the org buffer.
 - An elisp API to query and control the browser: list tabs, focus,
@@ -265,6 +270,59 @@ time by passing the client name explicitly:
 (browsel-org-link "firefox")
 (browsel-request "GET_ALL_TABS" nil "chrome")
 #+end_src
+
+** Route URLs through browsel
+
+=browsel-url-handler= provides =browsel-browse-url=, a function that
+sends URLs from Emacs to a connected browser.  Set
+=browse-url-browser-function= to it and every URL Emacs opens (org
+links, eww, mu4e, dired, …) is routed to a chosen browser according
+to =browsel-url-routes=, optionally into an incognito window.  When
+a tab matching the URL is already open, =browsel-browse-url= focuses
+that tab rather than opening a new one.
+
+#+begin_src emacs-lisp
+;; One-liner to send everything through browsel using browsel-default-client.
+(setq browse-url-browser-function #'browsel-browse-url)
+
+;; Per-URL routing: first match wins.
+(setq browsel-url-routes
+      '((:pattern "github\\.com/"
+         :client  "chrome")
+        (:pattern "app\\.slack\\.com/"
+         :client  "chrome"
+         :tab-match "app\\.slack\\.com/")
+        (:pattern "news\\.ycombinator\\.com/"
+         :client  "firefox"
+         :incognito t)))
+#+end_src
+
+Each route plist accepts:
+
+| Key          | Required | Purpose                                                          |
+|--------------+----------+------------------------------------------------------------------|
+| =:pattern=   | yes      | Regex matched anywhere in the URL (no anchors needed)            |
+| =:client=    | yes      | Client to address (=chrome= / =firefox=)                        |
+| =:incognito= | no       | When =t=, open in an incognito / private window                  |
+| =:tab-match= | no       | Override for the already-open tab detection; absent → use =:pattern= |
+
+When a route matches and an existing tab on that client matches the
+URL (subject to the incognito constraint), the tab is focused and its
+window raised.  Otherwise a fresh tab is opened — in an incognito
+window for incognito routes, in the active window otherwise.
+
+When *no* route matches, =browsel-default-client= is used,
+non-incognito, with a relaxed already-open check: any tab whose URL
+contains the requested URL's domain (with leading =www.= stripped)
+is treated as the same tab.  So =https://amazon.ca/foo= reuses an
+open tab on =https://www.amazon.ca/dp/B1234=.
+
+*Incognito caveat.*  Opening an incognito tab requires the user to
+toggle *Allow in incognito* for the browsel extension on
+=chrome://extensions= (or the Firefox equivalent).  Without that
+toggle the extension cannot enumerate or create incognito windows;
+=browsel-browse-url= detects the failure, warns, and falls back to a
+normal tab so the URL still reaches the user.
 
 ** Jump to a tab
 
@@ -592,6 +650,9 @@ Configuration variables for paths, output locations, and credentials
 | =browsel-youtube-api-key=         | YouTube Data API v3 key (for video metadata)  |
 | =browsel-org-capture-key=         | org-capture template key for browser captures |
 | =browsel-default-client=          | default browser client for every browsel command |
+| =browsel-url-routes=              | per-pattern URL routing for =browsel-browse-url= |
+| =browsel-clients-needing-activation= | client names whose macOS app needs an explicit foreground nudge after focus (default =("firefox")=) |
+| =browsel-client-app-names=        | fallback macOS application names per client when the PID-based activation can't find the process |
 | =browsel-tab-manager-sort=        | initial sort for jump-to-tab (default =mru=, cycle with =C-t=) |
 | =browsel-tab-manager-domain-column-width= | width of the domain column in jump-to-tab    |
 | =browsel-tab-manager-confirm-close= | when non-nil, =M-k= prompts before closing a tab |

@@ -223,6 +223,7 @@ org-capture templates: =(browsel-get-url)=,
 | =GET_ALL_TABS=       | (none)                         | array of Chrome Tab plists            |
 | =GET_ACTIVE_TAB=     | (none)                         | array (active tabs of current window) |
 | =OPEN_TAB=           | =:url=                           | the created Tab                       |
+| =OPEN_INCOGNITO_TAB= | =:url=                           | created Tab (reuses an existing incognito window or creates one) |
 | =FOCUS_TAB=          | =:id=, optional =:focusWindow=     | ={:status "ok"}=                        |
 | =CLOSE_TAB=          | =:id=                            | =null=                                  |
 | =EVAL_IN_ACTIVE_TAB= | =:code=, optional =:world=, =:tabId= | =:result= = array of =InjectionResult=    |

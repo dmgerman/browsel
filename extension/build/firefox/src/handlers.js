@@ -58,6 +58,55 @@ async function syncTabIcon(tabId) {
 }
 
 const SHAPE_ADAPTERS = {
+  // { url: "..." } -> creates a tab in an incognito window.  If an
+  // incognito window already exists for this profile, reuse it
+  // (chrome.tabs.create + windowId).  Otherwise open a fresh
+  // incognito window with the URL (chrome.windows.create + incognito).
+  // The parent window is focused so the OS brings it forward.  Fails
+  // with an actionable message if the extension lacks "Allow in
+  // incognito" — the elisp side catches that and degrades.
+  async "open-incognito-tab"(payload) {
+    if (!payload || typeof payload.url !== "string") {
+      throw new Error("open-incognito-tab: payload.url (string) required");
+    }
+    let wins;
+    try {
+      wins = await api.windows.getAll({
+        populate: false,
+        windowTypes: ["normal"],
+      });
+    } catch (e) {
+      throw new Error(
+        "open-incognito-tab: enumerate windows failed (" + e.message + ")",
+      );
+    }
+    const inc = wins.find((w) => w.incognito === true);
+    if (inc) {
+      const tab = await api.tabs.create({
+        windowId: inc.id,
+        url:      payload.url,
+        active:   true,
+      });
+      await api.windows.update(inc.id, { focused: true });
+      return tab;
+    }
+    let win;
+    try {
+      win = await api.windows.create({
+        url:       payload.url,
+        incognito: true,
+        focused:   true,
+      });
+    } catch (e) {
+      // Most common failure: extension lacks "Allow in incognito" toggle.
+      throw new Error(
+        "open-incognito-tab: create incognito window failed (" + e.message +
+        "); enable 'Allow in incognito' for the browsel extension",
+      );
+    }
+    return (win && win.tabs && win.tabs[0]) || { status: "ok" };
+  },
+
   // { id: 123 } -> chrome.tabs.update(123, { active: true })
   // optional { focusWindow: true } also focuses the parent window.
   async "focus-tab"(payload) {
