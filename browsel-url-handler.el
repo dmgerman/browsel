@@ -109,11 +109,10 @@ Each element is a plist with these keys:
   :tab-match REGEX
     Optional override for the already-open detection.  When set,
     this regex is matched against the tab URLs returned by
-    `GET_ALL_TABS'.  Without this key the route's `:pattern' is
-    used for tab matching — the same regex that picked the client
-    also identifies an open tab as the same destination.  Set
-    `:tab-match' explicitly when the tab match needs to be stricter
-    or looser than the routing match.
+    `GET_ALL_TABS'.  Without this key the tab match defaults to
+    \"the tab URL must contain the requested URL\" (regexp-quoted),
+    independent of `:pattern' — routing (which client) and tab
+    matching (which open tab) are separate concerns.
 
 URLs that match no entry fall through to `browsel-default-client',
 non-incognito, with identical-URL match."
@@ -125,14 +124,28 @@ non-incognito, with identical-URL match."
 (defun browsel-url-handler--domain (url)
   "Return the host of URL with a leading `www.' stripped, or nil.
 Used by the no-route fallback to find an already-open tab whose URL
-contains the same domain — e.g. opening `https://amazon.ca/foo'
-will reuse a tab already on `https://www.amazon.ca/dp/B1234'."
+contains the same domain — e.g. opening `https://amazon.ca/' will
+reuse a tab already on `https://www.amazon.ca/dp/B1234'."
   (let ((host (and (stringp url)
                    (ignore-errors
                      (url-host (url-generic-parse-url url))))))
     (and host
          (not (string-empty-p host))
          (replace-regexp-in-string "\\`www\\." "" host))))
+
+(defun browsel-url-handler--bare-domain-p (url)
+  "Return non-nil when URL is a bare domain (no path beyond `/').
+Used to scope the no-route domain-substring fallback to URLs that
+explicitly target a site's root.  A URL with a real path (e.g.
+`https://github.com/foo/bar') resolves via identical-URL match
+instead, so it doesn't land on whichever other-page tab on the
+same domain happens to be the most-recently-accessed."
+  (let ((path (and (stringp url)
+                   (ignore-errors
+                     (url-filename (url-generic-parse-url url))))))
+    (or (null path)
+        (string-empty-p path)
+        (string= path "/"))))
 
 (defun browsel-url-handler--match-route (url)
   "Return the first entry in `browsel-url-routes' whose :pattern matches URL.
@@ -207,18 +220,23 @@ foreground the same way the focus-existing-tab path does."
 (defun browsel-browse-url (url &rest _ignored)
   "Open URL in a browser via browsel, honoring `browsel-url-routes'.
 
-Resolution order:
-  1. The first route in `browsel-url-routes' whose :pattern matches
-     URL provides the target client, incognito flag, and tab-match
-     regex.  Without an explicit :tab-match, the route's :pattern is
-     reused for the already-open check — the same regex that picked
-     the client also identifies an open tab as the same destination.
-  2. When no route matches, `browsel-default-client' is used with
-     incognito nil, and the already-open check is relaxed to a
-     domain-substring match: any tab whose URL contains the
-     requested URL's host (with leading `www.' stripped) is treated
-     as the same tab.  So `https://amazon.ca/foo' reuses an open
-     tab on `https://www.amazon.ca/dp/B1234'.
+Two separate concerns:
+
+  (a) ROUTING — which client to send the URL to.  The first route
+      in `browsel-url-routes' whose `:pattern' matches URL provides
+      the client and incognito flag.  No route matches →
+      `browsel-default-client', non-incognito.
+
+  (b) TAB MATCHING — whether to focus an already-open tab or open
+      a new one.  By default the tab URL must fully contain the
+      requested URL: a sub-page of the requested URL still counts
+      (requesting `https://github.com/x/y' focuses a tab on
+      `https://github.com/x/y/issues/3'), but an unrelated page on
+      the same domain does not.  Bare-domain requests get a small
+      relaxation — the requested host (with leading `www.' stripped)
+      is the substring needle, so opening `https://amazon.ca/' still
+      reuses an open tab on `https://www.amazon.ca/dp/B1234'.  A
+      route's `:tab-match' overrides the default.
 
 After resolution, if a tab qualifies as already open on the target
 client (subject to the route's incognito constraint), the function
@@ -232,22 +250,26 @@ accepted and ignored."
   (let* ((route     (browsel-url-handler--match-route url))
          (client    (or (plist-get route :client) browsel-default-client))
          (incognito (plist-get route :incognito))
+         ;; Routing (which client) and tab matching (which existing
+         ;; tab) follow different rules.  The route's `:pattern' is
+         ;; only for deciding the client; tab matching defaults to
+         ;; URL substring — the tab URL must fully contain the
+         ;; requested URL.  An explicit `:tab-match' overrides.
          (tab-match (or (plist-get route :tab-match)
-                        ;; When a route matches without an explicit
-                        ;; `:tab-match', reuse its `:pattern' for tab
-                        ;; matching.  Same principle: if the regex
-                        ;; identifies a URL as belonging to a client,
-                        ;; any tab whose URL matches the same regex
-                        ;; is the same logical destination.
-                        (plist-get route :pattern)
-                        ;; Fallback when no route matches: any open
-                        ;; tab whose URL contains the requested URL's
-                        ;; domain wins.  E.g. opening
-                        ;; `https://amazon.ca/foo' jumps to a tab
-                        ;; already on `https://www.amazon.ca/dp/B1234'.
-                        (and (null route)
-                             (let ((d (browsel-url-handler--domain url)))
-                               (and d (regexp-quote d)))))))
+                        (if (browsel-url-handler--bare-domain-p url)
+                            ;; Bare-domain shortcut: the host (minus
+                            ;; `www.') is the needle, so a bare
+                            ;; `amazon.ca/' still focuses an open
+                            ;; `www.amazon.ca/...' tab.
+                            (let ((d (browsel-url-handler--domain url)))
+                              (and d (regexp-quote d)))
+                          ;; URL with a path: tab URL must contain the
+                          ;; full requested URL.  Sub-pages of the
+                          ;; requested URL still count (`.../foo'
+                          ;; focuses a tab on `.../foo/issues/3'),
+                          ;; but unrelated pages on the same domain
+                          ;; do not.
+                          (regexp-quote url)))))
     (unless client
       (user-error
        "browsel-url-handler: no client to route URL to (set browsel-default-client or add a :client to the matching route)"))

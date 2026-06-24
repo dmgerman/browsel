@@ -107,6 +107,30 @@ const SHAPE_ADAPTERS = {
     return (win && win.tabs && win.tabs[0]) || { status: "ok" };
   },
 
+  // { url: "..." } -> chrome.tabs.create({ url }) followed by
+  // chrome.windows.update(newTab.windowId, { focused: true }).  The
+  // extra windows.update fixes a Chrome-on-macOS quirk: tabs.create
+  // alone activates the new tab inside its window but does NOT bring
+  // the browser app to the OS foreground when the app is in the
+  // background.  windows.update with focused:true does.  Returns the
+  // created tab so callers see the same shape they used to.
+  async "open-tab-focused"(payload) {
+    const args = payload && typeof payload === "object" ? payload : {};
+    if (typeof args.url !== "string" || args.url.length === 0) {
+      throw new Error("open-tab-focused: payload.url (string) required");
+    }
+    const tab = await api.tabs.create(args);
+    if (tab && typeof tab.windowId === "number") {
+      try {
+        await api.windows.update(tab.windowId, { focused: true });
+      } catch (e) {
+        // Best-effort: focus failure should not invalidate the
+        // already-created tab.  Caller still gets a usable Tab.
+      }
+    }
+    return tab;
+  },
+
   // { id: 123 } -> chrome.tabs.update(123, { active: true })
   // optional { focusWindow: true } also focuses the parent window.
   async "focus-tab"(payload) {

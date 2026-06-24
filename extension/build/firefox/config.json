@@ -1,7 +1,7 @@
 {
   "extension": {
     "name": "Browsel (Emacs bridge)",
-    "version": "0.91",
+    "version": "0.92",
     "description": "Bidirectional WebSocket bridge between a WebExtension (Chrome or Firefox) and a running Emacs instance.",
 
     "options_ui": {
@@ -221,7 +221,7 @@
   "handlers": [
     { "name": "GET_ALL_TABS",       "api": "chrome.tabs.query",  "args": {} },
     { "name": "GET_ACTIVE_TAB",     "api": "chrome.tabs.query",  "args": { "active": true, "currentWindow": true } },
-    { "name": "OPEN_TAB",           "api": "chrome.tabs.create", "args-from": "payload" },
+    { "name": "OPEN_TAB",           "api": "chrome.tabs.create", "args-shape": "open-tab-focused" },
     { "name": "OPEN_INCOGNITO_TAB", "api": "chrome.tabs.create", "args-shape": "open-incognito-tab" },
     { "name": "FOCUS_TAB",          "api": "chrome.tabs.update", "args-shape": "focus-tab" },
     { "name": "CLOSE_TAB",          "api": "chrome.tabs.remove", "args-shape": "tab-id" },
