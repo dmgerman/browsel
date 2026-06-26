@@ -106,21 +106,29 @@ nil means the user selects the template interactively.")
 
 (defcustom browsel-default-client nil
   "Name of the connected browsel client to address by default.
-Either nil (each browsel command auto-detects: the sole connected
-client when only one is connected, prompt-or-error when more than
-one) or one of the strings returned by `browsel-connected-clients'
-— typically \"chrome\" or \"firefox\".
+One of:
+
+  - nil — each browsel command auto-detects: the sole connected
+    client when only one is connected, prompt-or-error when more
+    than one.
+  - a string returned by `browsel-connected-clients' — typically
+    \"chrome\" or \"firefox\".
+  - the string \"eww\" — `browsel-browse-url' opens URLs in eww
+    instead of a connected browser.  This applies only to URL
+    routing; every other browsel helper (insert-selection,
+    scroll-page, tab-manager, chatgpt, youtube, …) needs a real
+    WS-bridge client and falls back to single-connected /
+    prompt-on-ambiguity when this value is \"eww\".
 
 This is the single user-wide default used by every browsel
-command that needs to pick a client (insert-org-link,
-insert-selection, scroll-page, tab-manager, …).  Set once in
-your config and the multi-client prompt disappears.  Change it
-mid-session with `M-x browsel-set-default-client' (prefix arg
-clears it back to nil).  The assumption is that interactive use
-targets one browser at a time; programmatic callers can still
-talk to either browser by passing an explicit CLIENT to the
-helpers."
+command that needs to pick a client.  Set once in your config
+and the multi-client prompt disappears.  Change it mid-session
+with `M-x browsel-set-default-client' (prefix arg clears it back
+to nil).  The assumption is that interactive use targets one
+browser at a time; programmatic callers can still talk to either
+browser by passing an explicit CLIENT to the helpers."
   :type '(choice (const  :tag "Auto / prompt on ambiguity" nil)
+                 (const  :tag "Internal eww" "eww")
                  (string :tag "Client name"))
   :group 'browsel)
 
@@ -1005,9 +1013,12 @@ Uses `browsel-org-capture-key' if set, otherwise prompts interactively."
 With a prefix argument, clear the setting back to nil without
 prompting (subsequent commands fall back to auto-detection /
 prompt-on-ambiguity).  Interactively, prompts via `completing-read'
-over the currently-connected clients; defaults to the existing
-value when it is still connected, otherwise to the first
-connected client.
+over the currently-connected clients plus the literal \"eww\";
+defaults to the existing value when it is still connected,
+otherwise to the first connected client.  Selecting \"eww\" stores
+the string \"eww\", which routes `browsel-browse-url' to eww
+instead of a browser — every other browsel command then falls
+back to its single-connected / prompt-on-ambiguity behavior.
 
 The model is: interactive use targets one browser at a time —
 this command picks which one.  Programmatic callers can still
@@ -1017,16 +1028,21 @@ CLIENT argument to `browsel-request' or any of the helpers."
    (list
     (if current-prefix-arg
         nil
-      (let ((connected (browsel-connected-clients)))
+      (let* ((connected (browsel-connected-clients))
+             (choices   (append connected '("eww"))))
         (unless connected
           (user-error "browsel: no client connected"))
-        (completing-read
-         (format "Default browser (%s): "
-                 (mapconcat #'identity connected ", "))
-         connected nil t nil nil
-         (or (and (member browsel-default-client connected)
-                  browsel-default-client)
-             (car connected)))))))
+        (let ((chosen
+               (completing-read
+                (format "Default browser (%s): "
+                        (mapconcat #'identity choices ", "))
+                choices nil t nil nil
+                (cond
+                 ((equal browsel-default-client "eww") "eww")
+                 ((and (member browsel-default-client connected)
+                       browsel-default-client))
+                 (t (car connected))))))
+          chosen)))))
   (setq browsel-default-client client)
   (message "browsel-default-client = %S" client))
 
@@ -1049,7 +1065,11 @@ path (passing CLIENT=nil to a helper) still delegates to
     (cond
      ((null connected)
       (user-error "browsel: no client connected"))
+     ;; `browsel-default-client' set to "eww" is URL-routing only;
+     ;; non-URL helpers (the callers of this function) need an actual
+     ;; WS-bridge client, so fall through as if no default were set.
      ((and browsel-default-client
+           (not (equal browsel-default-client "eww"))
            (member browsel-default-client connected))
       browsel-default-client)
      ((= 1 (length connected))
@@ -1062,8 +1082,12 @@ path (passing CLIENT=nil to a helper) still delegates to
               connected nil t nil nil
               (car connected))))
         ;; Remember for the rest of this Emacs session so the user
-        ;; isn't asked again every time a browsel command runs.
-        (setq browsel-default-client chosen)
+        ;; isn't asked again every time a browsel command runs.  Do
+        ;; not overwrite an "eww" default — that setting is a
+        ;; deliberate URL-routing choice the user can keep across
+        ;; transient WS-bridge picks made here.
+        (unless (equal browsel-default-client "eww")
+          (setq browsel-default-client chosen))
         chosen)))))
 
 (defun browsel--active-tab (&optional client)

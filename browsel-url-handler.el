@@ -39,6 +39,12 @@
 ;; wins; URLs that match nothing fall through to
 ;; `browsel-default-client', non-incognito.
 ;;
+;; A route's `:client' may be the string \"eww\" (or
+;; `browsel-default-client' itself may be \"eww\") to render the URL
+;; inside Emacs with eww instead of dispatching to a connected
+;; browser.  No WS bridge call is made in that case; buffer reuse is
+;; left to `eww-reuse-buffers'.
+;;
 ;; When an existing matching tab is found (under the route's incognito
 ;; constraint), the function focuses it and raises the browser window.
 ;; Otherwise a fresh tab is opened — in an incognito window for
@@ -97,6 +103,10 @@ Each element is a plist with these keys:
   :client CLIENT-NAME
     String — the browsel client to address (e.g. \"chrome\" or
     \"firefox\").  Must name a currently-connected client.
+    May also be the string \"eww\", in which case the URL is opened
+    in Emacs with `eww' and the WS bridge is not used.  When
+    `:client' is \"eww\", `:incognito' and `:tab-match' are ignored;
+    buffer reuse is governed by `eww-reuse-buffers'.
 
   :incognito BOOL
     Optional.  When non-nil, the tab is opened in an incognito /
@@ -225,7 +235,10 @@ Two separate concerns:
   (a) ROUTING — which client to send the URL to.  The first route
       in `browsel-url-routes' whose `:pattern' matches URL provides
       the client and incognito flag.  No route matches →
-      `browsel-default-client', non-incognito.
+      `browsel-default-client', non-incognito.  When the resolved
+      client is the string \"eww\", the URL is opened in Emacs with
+      `eww' and the rest of this docstring (tab matching, incognito,
+      window raising) does not apply.
 
   (b) TAB MATCHING — whether to focus an already-open tab or open
       a new one.  By default the tab URL must fully contain the
@@ -248,7 +261,17 @@ Compatible with `browse-url-browser-function'; extra arguments are
 accepted and ignored."
   (interactive (list (read-string "URL: ")))
   (let* ((route     (browsel-url-handler--match-route url))
-         (client    (or (plist-get route :client) browsel-default-client))
+         ;; No route, no `browsel-default-client': pick a client now
+         ;; rather than erroring out.  `browsel--read-client-interactive'
+         ;; returns the sole connected client when there is only one,
+         ;; prompts the user when there are several, and stores the
+         ;; chosen value into `browsel-default-client' so the next
+         ;; URL doesn't ask again.  It signals `user-error' when no
+         ;; client is connected at all — same end state as before,
+         ;; clearer message.
+         (client    (or (plist-get route :client)
+                        browsel-default-client
+                        (browsel--read-client-interactive)))
          (incognito (plist-get route :incognito))
          ;; Routing (which client) and tab matching (which existing
          ;; tab) follow different rules.  The route's `:pattern' is
@@ -270,14 +293,18 @@ accepted and ignored."
                           ;; but unrelated pages on the same domain
                           ;; do not.
                           (regexp-quote url)))))
-    (unless client
-      (user-error
-       "browsel-url-handler: no client to route URL to (set browsel-default-client or add a :client to the matching route)"))
-    (let ((existing (browsel-url-handler--find-existing-tab
-                     url client incognito tab-match)))
-      (if existing
-          (browsel-url-handler--focus existing client)
-        (browsel-url-handler--open-new url client incognito)))))
+    (cond
+     ;; eww short-circuit — no WS bridge, no tab matching; eww's own
+     ;; `eww-reuse-buffers' governs whether an existing eww buffer is
+     ;; reused.
+     ((equal client "eww")
+      (eww url))
+     (t
+      (let ((existing (browsel-url-handler--find-existing-tab
+                       url client incognito tab-match)))
+        (if existing
+            (browsel-url-handler--focus existing client)
+          (browsel-url-handler--open-new url client incognito)))))))
 
 (provide 'browsel-url-handler)
 

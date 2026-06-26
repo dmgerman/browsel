@@ -13,6 +13,25 @@ Going the other way: from Emacs query browser state (what tabs are
 open?  what's the page title?  what's the video's current time?) and
 act on it.
 
+- extensible browser menu where you can request emacs to do something. currently:
+  - org-capture
+  - org-roam-capture
+  - save current transcript video
+  - save current video info
+  - save current chatGPT session to an org-file
+  - save current page in org
+- from emacs:
+  - manage tabs (MRU ordered by default)
+  - URL handler
+     - including the ability to route different urls to different browsers
+  - control a video playing
+  - babel support to execute in the current tab (or tab with specific id)
+  - the ability to create your own commands to interact with the browser
+
+I have created a video to introduce its features:
+
+[[https://www.youtube.com/watch?v=8nSiG\_hMZWI]]
+     
 =browsel= is composed of two parts:
 
 1. *An Emacs side*.  A WebSocket server on =127.0.0.1:9130= that
@@ -294,7 +313,9 @@ that tab rather than opening a new one.
          :tab-match "app\\.slack\\.com/")
         (:pattern "news\\.ycombinator\\.com/"
          :client  "firefox"
-         :incognito t)))
+         :incognito t)
+        (:pattern "sachachua\\.com/"
+         :client  "eww")))   ; opens in Emacs's eww
 #+end_src
 
 Each route plist accepts:
@@ -302,7 +323,7 @@ Each route plist accepts:
 | Key          | Required | Purpose                                                          |
 |--------------+----------+------------------------------------------------------------------|
 | =:pattern=   | yes      | Regex matched anywhere in the URL (no anchors needed)            |
-| =:client=    | yes      | Client to address (=chrome= / =firefox=)                        |
+| =:client=    | yes      | Client to address: ="chrome"=, ="firefox"=, or ="eww"= (open in Emacs's eww) |
 | =:incognito= | no       | When =t=, open in an incognito / private window                  |
 | =:tab-match= | no       | Override for the already-open tab detection; absent → tab URL must contain the requested URL |
 
