@@ -190,12 +190,12 @@ chapter is left to the caller's later body-sanitization pass."
 ;; ── Org entry builder ─────────────────────────────────────────────────────────
 
 (defun browsel-youtube--escape-template (s)
-  "Escape S so org-capture-fill-template treats every char as literal.
+  "Escape S so `org-capture-fill-template' treats every char as literal.
 A `%' followed by certain letters (or by `(') is a template directive;
 URL-encoded text from a YouTube description can hold such sequences
-(e.g. `%A6' = ellipsis), and org-capture would otherwise interpret
+\(e.g. `%A6' = ellipsis), and `org-capture' would otherwise interpret
 them — prompting for a Link description, splicing in `org-store-link'
-output, evaluating sexps, etc.  org-capture's own escape syntax is
+output, evaluating sexps, etc.  `org-capture''s own escape syntax is
 `\\\\' before `%', so double backslashes first, then prepend one
 backslash to every `%'."
   (replace-regexp-in-string "%" "\\\\%"
@@ -664,12 +664,12 @@ connected."
     (unless (and url (string-match-p
                       "\\`https?://\\(www\\.\\)?\\(youtube\\.com\\|youtu\\.be\\)"
                       url))
-      (user-error "browsel: active tab is not on YouTube"))
+      (user-error "Browsel: active tab is not on YouTube"))
     (let* ((code "(() => { const v = document.querySelector('video');
                             return v ? v.currentTime : null; })()")
            (seconds (browsel--eval-active code client)))
       (unless (numberp seconds)
-        (user-error "browsel: no video element on the active YouTube tab"))
+        (user-error "Browsel: no video element on the active YouTube tab"))
       (let* ((ts-url  (browsel-youtube--url-with-timestamp url seconds))
              (ts-str  (browsel--format-time-hms seconds))
              (desc    (format "%s @ %s" title ts-str))

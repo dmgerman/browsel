@@ -517,7 +517,7 @@ the name is already taken by a different websocket.
 
 The PAYLOAD must include a `:version' string that exactly matches
 `browsel-version'.  The version check is strict: any mismatch
-(including a missing or empty version) rejects the hello with an
+\(including a missing or empty version) rejects the hello with an
 error payload, leaves the client unregistered (its placeholder
 \"unknown-N\" name persists), and the extension's ws-client treats
 the connection as incompatible and stops the reconnect loop."
@@ -634,7 +634,7 @@ roster."
       (unless id
         ;; Request-async already warned and invoked the callback with a
         ;; status:error payload, so escalate to an error here too.
-        (error "browsel-request: no acceptable target for %s" name))
+        (error "Browsel-request: no acceptable target for %s" name))
       (let ((deadline (+ (float-time)
                          (+ 0.5 browsel-request-timeout))))
         (cl-labels
@@ -869,7 +869,7 @@ terminate a surrounding link or drawer line, or carry a heading break."
   "Sanitize S for multi-line Org body text.
 Indents any line that would otherwise start an Org heading (`*' in
 column 0), a drawer marker (`:NAME:'), or a file-level keyword
-(`#+...'), so structure cannot be injected by a page-controlled
+\(`#+...'), so structure cannot be injected by a page-controlled
 selection, description, or transcript.  Indented variants of those
 constructs are inert to the Org parser."
   (replace-regexp-in-string
@@ -891,12 +891,12 @@ cannot introduce headings or drawer markers."
 
 (defun browsel--store-link-plist (payload)
   "Return an `org-store-link-plist' for PAYLOAD's url and title.
-Drives `%a' (annotation) expansion in org-capture templates so that
+Drives `%a' (annotation) expansion in `org-capture' templates so that
 each capture sees the current browser link rather than whatever link
 Emacs happened to store last.  `:annotation' is set explicitly because
-org-capture reads it directly when `org-capture-link-is-already-stored'
+`org-capture' reads it directly when `org-capture-link-is-already-stored'
 is non-nil.  For an unsafe URL scheme the `:link' field is left blank
-(so `%L'/`%l' do not splice a clickable bad link) and `:annotation' is
+\(so `%L'/`%l' do not splice a clickable bad link) and `:annotation' is
 the plain-text rendering produced by `browsel--make-link'."
   (let* ((url   (plist-get payload :url))
          (title (or (plist-get payload :title) "Web capture")))
@@ -1032,7 +1032,7 @@ CLIENT argument to `browsel-request' or any of the helpers."
       (let* ((connected (browsel-connected-clients))
              (choices   (append connected '("eww"))))
         (unless connected
-          (user-error "browsel: no client connected"))
+          (user-error "Browsel: no client connected"))
         (let ((chosen
                (completing-read
                 (format "Default browser (%s): "
@@ -1065,7 +1065,7 @@ path (passing CLIENT=nil to a helper) still delegates to
   (let ((connected (browsel-connected-clients)))
     (cond
      ((null connected)
-      (user-error "browsel: no client connected"))
+      (user-error "Browsel: no client connected"))
      ;; `browsel-default-client' set to "eww" is URL-routing only;
      ;; non-URL helpers (the callers of this function) need an actual
      ;; WS-bridge client, so fall through as if no default were set.
@@ -1095,7 +1095,7 @@ path (passing CLIENT=nil to a helper) still delegates to
   "Return the active tab plist from CLIENT, or signal if none."
   (let ((tab (car (browsel-request "GET_ACTIVE_TAB" nil client))))
     (unless tab
-      (error "browsel: no active tab"))
+      (error "Browsel: no active tab"))
     tab))
 
 (defun browsel--eval-active (code &optional client)
@@ -1171,7 +1171,7 @@ prompts when more than one client is connected."
                          return v ? v.currentTime : null; })()")
          (seconds (browsel--eval-active code client)))
     (unless (numberp seconds)
-      (user-error "browsel: no video on this page"))
+      (user-error "Browsel: no video on this page"))
     (let ((str (browsel--format-time-hms seconds)))
       (if (called-interactively-p 'any)
           (progn (insert str) nil)

@@ -218,7 +218,7 @@ through unchanged."
   "Return a completion table backed by ALIST that preserves entry order.
 `completing-read' otherwise sorts candidates alphabetically; the
 `display-sort-function' metadata tells modern completion frontends
-(vertico, icomplete, the default minibuffer) to keep the MRU order
+\(vertico, icomplete, the default minibuffer) to keep the MRU order
 the caller produced."
   (lambda (string pred action)
     (if (eq action 'metadata)
@@ -340,7 +340,7 @@ default, not the current state).")
 Prefers `vertico--candidate' when Vertico is the active frontend in
 this minibuffer (detected via `bound-and-true-p' on its buffer-local
 marker, since the defvar is bound globally), then the first entry of
-`completion-all-sorted-completions' (Icomplete and default cycle),
+the variable `completion-all-sorted-completions' (Icomplete and default cycle),
 and finally falls back to the typed minibuffer contents passed
 through `try-completion'."
   (cond
@@ -557,7 +557,7 @@ function tail-recurses with it; otherwise it focuses the chosen
 tab and returns."
   (let* ((tabs (browsel-request "GET_ALL_TABS" nil client)))
     (unless (and (listp tabs) tabs)
-      (user-error "browsel-tab-manager: no tabs returned from %s" client))
+      (user-error "Browsel-tab-manager: no tabs returned from %s" client))
     (let* ((sorted (browsel-tab-manager--sort-tabs tabs sort))
            (alist  (browsel-tab-manager--candidates sorted))
            (browsel-tab-manager--current-alist  alist)
@@ -591,7 +591,7 @@ tab and returns."
                          (tab  (or (cdr (assoc key  alist))
                                    (cdr (assoc pick alist)))))
                     (unless tab
-                      (user-error "browsel-tab-manager: no tab matches %S"
+                      (user-error "Browsel-tab-manager: no tab matches %S"
                                   pick))
                     (browsel-request "FOCUS_TAB"
                                      `(:id ,(plist-get tab :id) :focusWindow t)
@@ -631,10 +631,10 @@ and its parent window via the extension's FOCUS_TAB handler.
 
 In-prompt keys (see also `?' inside the prompt):
   ?       legend + action-key help
-  C-c c   copy the highlighted candidate's URL to the kill ring
-  M-k     close the highlighted candidate's tab and stay in the prompt
-  M-RET   show the highlighted tab in Chrome without raising its window
-  C-t     cycle the sort order"
+  \\[browsel-tab-manager-jump-copy-url]   copy the highlighted candidate's URL to the kill ring
+  \\[browsel-tab-manager-jump-close-tab]     close the highlighted candidate's tab and stay in the prompt
+  \\[browsel-tab-manager-jump-show-tab]   show the highlighted tab in Chrome without raising its window
+  \\[browsel-tab-manager-jump-cycle-sort]     cycle the sort order"
   (interactive)
   (browsel-tab-manager--run-prompt (browsel--read-client-interactive)
                                    browsel-tab-manager-sort))

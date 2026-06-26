@@ -28,7 +28,7 @@
 ;; Optional browsel module that routes URLs from Emacs to a connected
 ;; browser via the WebSocket bridge.  Drop-in `browsel-browse-url' is
 ;; compatible with `browse-url-browser-function', so any Emacs command
-;; that opens a URL (org links, eww, mu4e, dired, …) can be made to go
+;; that opens a URL (org links, eww, mu4e, Dired, …) can be made to go
 ;; through browsel.
 ;;
 ;; Routing is configured in `browsel-url-routes' as an ordered list of

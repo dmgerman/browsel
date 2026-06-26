@@ -34,3 +34,6 @@ jobs:
 
       - name: Run package-lint via make
         run: make lint
+
+      - name: Run checkdoc via make
+        run: make checkdoc

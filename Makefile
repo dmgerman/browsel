@@ -6,11 +6,12 @@
 # Targets:
 #   make             — compile + extension (default)
 #   make lint        — package-lint every browsel*.el file
+#   make checkdoc    — checkdoc every browsel*.el file (errors on any warning)
 #   make compile     — byte-compile every browsel*.el file (errors on warning)
 #   make extension   — rebuild Chrome + Firefox extension targets
 #                      (delegates to extension/Makefile's default target)
 #   make clean       — remove every *.elc file
-#   make check       — compile + lint
+#   make check       — compile + lint + checkdoc
 #   make all         — check + extension
 #
 # Override the Emacs binary by passing EMACS=path/to/emacs.
@@ -44,7 +45,7 @@ EMACS_BATCH = $(EMACS) -Q --batch \
   --eval "(add-to-list 'package-archives '(\"melpa\" . \"https://melpa.org/packages/\"))" \
   --eval "(package-initialize)"
 
-.PHONY: default lint compile clean check extension all
+.PHONY: default lint checkdoc compile clean check extension all
 
 # Default target: byte-compile the elisp and rebuild the WebExtension
 # bundles.  Lint is not included here so the common edit-then-`make' loop
@@ -64,6 +65,26 @@ lint: $(ELPA_DIR)/.installed
 	$(EMACS_BATCH) \
 	  --eval "(require 'package-lint)" \
 	  -f package-lint-batch-and-exit $(EL_FILES)
+
+# checkdoc runs in batch via `checkdoc-file', which writes warnings to
+# stderr (via `display-warning') but never exits non-zero on its own.
+# After each file, peek at the `*Warnings*' buffer to detect whether any
+# warning was emitted and exit 1 on the first one so CI fails on
+# regressions.  Stderr already carries the human-readable diagnostic;
+# no need to re-print it.  `-L .' lets each file `require' its siblings
+# during checkdoc's own load.
+checkdoc:
+	@$(EMACS_BATCH) \
+	  -L . \
+	  --eval "(require 'checkdoc)" \
+	  --eval "(let ((had-issue nil)) \
+	            (dolist (f command-line-args-left) \
+	              (with-current-buffer (get-buffer-create \"*Warnings*\") (erase-buffer)) \
+	              (checkdoc-file f) \
+	              (when (> (buffer-size (get-buffer-create \"*Warnings*\")) 0) \
+	                (setq had-issue t))) \
+	            (when had-issue (kill-emacs 1)))" \
+	  $(EL_FILES)
 
 # Compile each file in a fresh subprocess so a definition leaked by one file
 # cannot mask a missing `require' in another.  Treats every byte-compile
@@ -88,6 +109,6 @@ clean:
 extension:
 	$(MAKE) -C extension
 
-check: compile lint
+check: compile lint checkdoc
 
 all: check extension
