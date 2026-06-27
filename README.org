@@ -70,6 +70,11 @@ the short form.
    WebSocket server:
 
    #+begin_src emacs-lisp
+   ;; websocket is required
+   (use-package websocket
+     :ensure t)
+
+
    (use-package browsel
      :load-path "/path/to/browsel"
      :config
