@@ -52,9 +52,8 @@
 
 ;; Forward declarations for dynamic vars and functions from org-capture/org.
 (defvar org-capture-templates)
-(declare-function org-display-inline-images "org" (&optional include-linked refresh beg end))
-(declare-function org-link-preview-region   "ol"  (&optional arg interactive? beg end))
-(declare-function org-capture               "org-capture" (&optional goto keys))
+(declare-function org-link-preview-region "ol"         (&optional arg interactive? beg end))
+(declare-function org-capture             "org-capture" (&optional goto keys))
 
 ;; ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -298,12 +297,7 @@ Schedules the capture and returns immediately (respond-fast-then-defer)."
   "Refresh inline images when visiting `browsel-youtube-videos-file'."
   (when (string-match (regexp-quote (expand-file-name browsel-youtube-videos-file))
                       (or (buffer-file-name) ""))
-    ;; org-display-inline-images was deprecated in Org 9.8.  Prefer
-    ;; org-link-preview-region when available; fall back to the legacy name.
-    (if (fboundp 'org-link-preview-region)
-        (org-link-preview-region nil nil (point-min) (point-max))
-      (with-suppressed-warnings ((obsolete org-display-inline-images))
-        (org-display-inline-images)))))
+    (org-link-preview-region nil nil (point-min) (point-max))))
 
 (defun browsel-youtube--video-for-later (url title selection)
   "Capture YouTube video URL into `browsel-youtube-videos-file'.

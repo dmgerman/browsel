@@ -8,7 +8,7 @@
 ;; Keywords: comm, tools, browser, org
 ;; URL: https://github.com/dmgerman/browsel
 ;; Version: 0.93
-;; Package-Requires: ((emacs "27.1") (websocket "1.13") (org "9.4"))
+;; Package-Requires: ((emacs "27.1") (websocket "1.13") (org "9.8"))
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;;
@@ -72,8 +72,8 @@
 (defvar org-store-link-plist)
 (defvar org-capture-link-is-already-stored)
 (declare-function org-capture          "org-capture" (&optional goto keys))
-(declare-function org-roam-capture-    "org-roam"    (&rest args))
-(declare-function org-roam-node-create "org-roam"    (&rest args))
+(declare-function org-roam-capture-    "ext:org-roam" (&rest args))
+(declare-function org-roam-node-create "ext:org-roam" (&rest args))
 
 (defconst browsel-version "0.92"
   "Current version of the browsel package.")

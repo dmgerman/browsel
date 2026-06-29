@@ -4,15 +4,16 @@
 # extension's own Makefile for the WebExtension builds.
 #
 # Targets:
-#   make             — compile + extension (default)
-#   make lint        — package-lint every browsel*.el file
-#   make checkdoc    — checkdoc every browsel*.el file (errors on any warning)
-#   make compile     — byte-compile every browsel*.el file (errors on warning)
-#   make extension   — rebuild Chrome + Firefox extension targets
-#                      (delegates to extension/Makefile's default target)
-#   make clean       — remove every *.elc file
-#   make check       — compile + lint + checkdoc
-#   make all         — check + extension
+#   make                — compile + extension (default)
+#   make lint           — package-lint every browsel*.el file
+#   make checkdoc       — checkdoc every browsel*.el file (errors on any warning)
+#   make check-declare  — verify declare-function file arguments (errors on any mismatch)
+#   make compile        — byte-compile every browsel*.el file (errors on warning)
+#   make extension      — rebuild Chrome + Firefox extension targets
+#                         (delegates to extension/Makefile's default target)
+#   make clean          — remove every *.elc file
+#   make check          — compile + lint + checkdoc + check-declare
+#   make all            — check + extension
 #
 # Override the Emacs binary by passing EMACS=path/to/emacs.
 
@@ -45,7 +46,7 @@ EMACS_BATCH = $(EMACS) -Q --batch \
   --eval "(add-to-list 'package-archives '(\"melpa\" . \"https://melpa.org/packages/\"))" \
   --eval "(package-initialize)"
 
-.PHONY: default lint checkdoc compile clean check extension all
+.PHONY: default lint checkdoc check-declare compile clean check extension all
 
 # Default target: byte-compile the elisp and rebuild the WebExtension
 # bundles.  Lint is not included here so the common edit-then-`make' loop
@@ -86,6 +87,26 @@ checkdoc:
 	            (when had-issue (kill-emacs 1)))" \
 	  $(EL_FILES)
 
+# check-declare verifies the file argument of every `declare-function' form
+# by loading the named file and checking that the function is defined there.
+# `check-declare-file' returns a list of errors (or nil on success) and
+# writes a human-readable report to the `*Check Declarations Warnings*'
+# buffer.  We aggregate over all files and exit 1 on any finding so CI
+# fails on regressions.  `-L .' lets each file `require' its siblings.
+check-declare:
+	@$(EMACS_BATCH) \
+	  -L . \
+	  --eval "(require 'check-declare)" \
+	  --eval "(let ((had-issue nil)) \
+	            (dolist (f command-line-args-left) \
+	              (when (check-declare-file f) \
+	                (setq had-issue t))) \
+	            (when had-issue \
+	              (with-current-buffer (get-buffer-create check-declare-warning-buffer) \
+	                (princ (buffer-string))) \
+	              (kill-emacs 1)))" \
+	  $(EL_FILES)
+
 # Compile each file in a fresh subprocess so a definition leaked by one file
 # cannot mask a missing `require' in another.  Treats every byte-compile
 # warning as a hard error so CI catches them before commit.  `-L .' puts the
@@ -109,6 +130,6 @@ clean:
 extension:
 	$(MAKE) -C extension
 
-check: compile lint checkdoc
+check: compile lint checkdoc check-declare
 
 all: check extension
