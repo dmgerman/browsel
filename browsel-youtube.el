@@ -104,7 +104,7 @@ directory names or wildcard expansions."
 ;; ── Metadata fetching ─────────────────────────────────────────────────────────
 
 (defun browsel-youtube--fetch-oembed (url)
-  "Fetch YouTube oEmbed metadata for URL.  Returns a hash-table or nil."
+  "Fetch YouTube oEmbed metadata for URL.  Return a hash-table or nil."
   (let ((api-url (format "https://www.youtube.com/oembed?url=%s&format=json"
                          (url-hexify-string url))))
     (with-current-buffer (url-retrieve-synchronously api-url t t 5)

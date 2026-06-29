@@ -170,11 +170,11 @@ path is page-controlled and DOES get `browsel--sanitize-org-body' so a
             (format "** %s\n\n" heading)))
       (format "%s\n\n" body))))
 
-(defun browsel-chatgpt--save-html (turns file)
-  "Save raw HTML of TURNS to FILE as a minimal HTML document."
+(defun browsel-chatgpt--save-html (messages file)
+  "Save raw HTML of MESSAGES to FILE as a minimal HTML document."
   (with-temp-file file
     (insert "<!DOCTYPE html>\n<html><body>\n")
-    (dolist (turn turns)
+    (dolist (turn messages)
       (let ((role (plist-get turn :role))
             (html (plist-get turn :html)))
         (insert (format "<section data-role=\"%s\">\n%s\n</section>\n\n"

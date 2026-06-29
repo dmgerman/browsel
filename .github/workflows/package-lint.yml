@@ -37,3 +37,6 @@ jobs:
 
       - name: Run checkdoc via make
         run: make checkdoc
+
+      - name: Run check-declare via make
+        run: make check-declare

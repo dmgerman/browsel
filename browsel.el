@@ -499,7 +499,7 @@ response payload.  Re-registering overwrites the previous binding."
 ;; ── Built-in CLIENT_HELLO handler ────────────────────────────────────────────
 
 (defun browsel--unique-client-name (requested ws &optional n)
-  "Return REQUESTED, possibly with a -N suffix, that no other ws holds.
+  "Return REQUESTED, possibly with a -N suffix, unused by any other ws.
 WS is permitted to already own the requested name (idempotent reuse).
 Optional N is an internal recursion counter; callers should omit it."
   (let* ((n         (or n 1))
