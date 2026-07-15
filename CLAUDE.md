@@ -10,6 +10,9 @@ anything substantive.
 ## Rules
 
 - **Never commit.**  Tell the user when changes are ready; they commit.
+- **Development happens in the `dmg-devel` branch.**  Warn the user if
+  the current branch is `main` (check with `git branch --show-current`)
+  before making changes.
 - **Never modify `spookfox/` or `emacsProtocol/`** — frozen reference
   material.  They're checked into the tree on purpose so you can read
   the wire protocol and the old extension; if either ever needs an

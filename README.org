@@ -67,16 +67,18 @@ the short form.
 1. *Configure and start the Emacs side.*  Add a =use-package= form to
    your Emacs configuration that loads =browsel=, requires the
    optional backends for the features you want, and starts the
-   WebSocket server:
+   WebSocket server.
+
+   From MELPA (=browsel= is published at
+   https://melpa.org/#/browsel):
 
    #+begin_src emacs-lisp
    ;; websocket is required
    (use-package websocket
      :ensure t)
 
-
    (use-package browsel
-     :load-path "/path/to/browsel"
+     :ensure t
      :config
      (require 'browsel-www)         ; SAVE_PAGE
      (require 'browsel-chatgpt)     ; CHATGPT
@@ -84,6 +86,25 @@ the short form.
      (require 'browsel-babel)       ; org-babel browsel-js blocks
      (require 'browsel-tab-manager) ; M-x browsel-tab-manager
      (require 'browsel-url-handler) ; browsel-browse-url + browsel-url-routes
+     (browsel-start))
+   #+end_src
+
+   From a Git checkout (clone the repository, then point =:load-path=
+   at it):
+
+   #+begin_src emacs-lisp
+   (use-package websocket
+     :ensure t)
+
+   (use-package browsel
+     :load-path "/path/to/browsel"
+     :config
+     (require 'browsel-www)
+     (require 'browsel-chatgpt)
+     (require 'browsel-youtube)
+     (require 'browsel-babel)
+     (require 'browsel-tab-manager)
+     (require 'browsel-url-handler)
      (browsel-start))
    #+end_src
 
@@ -639,15 +660,13 @@ none of its external dependencies are needed.
 
 ** Emacs
 
-The elisp files are intended for distribution through MELPA (recipe
-in the =melpa/= subdirectory of this repository).  Once accepted,
-=M-x package-install RET browsel RET= will install the core
-=browsel.el= along with =browsel-www=,
-=browsel-chatgpt=, =browsel-youtube=, and
-=browsel-babel=.  Until then, clone the repository and point
-=:load-path= at it.
+The elisp files are distributed through MELPA
+(https://melpa.org/#/browsel).  =M-x package-install RET browsel
+RET= installs the core =browsel.el= along with =browsel-www=,
+=browsel-chatgpt=, =browsel-youtube=, and =browsel-babel=.  A Git
+checkout is also supported; point =:load-path= at the clone.
 
-The browser extension under =extension/= is not yet distributed through
+The browser extension under =extension/= is not distributed through
 MELPA; it must be loaded into the Web browser separately (see
 *Chrome extension* or *Firefox extension* below).  Installing only
 the elisp side will start the
@@ -655,8 +674,26 @@ WebSocket server but the popup status will remain Disconnected until
 the extension is loaded.
 
 One =use-package= form for the core, with one =require= per optional
-feature; comment out any you do not want loaded. Change load-path
-to the correct location:
+feature; comment out any you do not want loaded.
+
+From MELPA:
+
+#+begin_src emacs-lisp
+(use-package websocket :ensure t)
+
+(use-package browsel
+  :ensure t
+  :after websocket
+  :config
+  (require 'browsel-www)         ; SAVE_PAGE        (web archive)
+  (require 'browsel-chatgpt)     ; CHATGPT          (save conversation)
+  (require 'browsel-youtube)     ; YOUTUBE + YOUTUBE_TRANSCRIPT
+  (require 'browsel-babel)       ; org-babel browsel-js blocks
+  (require 'browsel-tab-manager) ; M-x browsel-tab-manager
+  (browsel-start))
+#+end_src
+
+From a Git checkout (change =:load-path= to the clone location):
 
 #+begin_src emacs-lisp
 (use-package websocket :ensure t)
@@ -665,11 +702,11 @@ to the correct location:
   :load-path "~/.emacs.d/modules/browsel"
   :after websocket
   :config
-  (require 'browsel-www)         ; SAVE_PAGE        (web archive)
-  (require 'browsel-chatgpt)     ; CHATGPT          (save conversation)
-  (require 'browsel-youtube)     ; YOUTUBE + YOUTUBE_TRANSCRIPT
-  (require 'browsel-babel)       ; org-babel browsel-js blocks
-  (require 'browsel-tab-manager) ; M-x browsel-tab-manager
+  (require 'browsel-www)
+  (require 'browsel-chatgpt)
+  (require 'browsel-youtube)
+  (require 'browsel-babel)
+  (require 'browsel-tab-manager)
   (browsel-start))
 #+end_src
 
