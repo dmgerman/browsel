@@ -71,6 +71,25 @@
     }
     table.raise td.toggle { text-align: center; width: 90px; }
     table.raise td.default { color: #888; font-size: 11px; }
+    input[type=text] {
+      font-size: 13px;
+      padding: 6px 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      box-sizing: border-box;
+    }
+    .identity-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .identity-row input[type=text] { flex: 1; min-width: 0; }
+    .identity-uuid {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 11px;
+      color: #888;
+      margin-top: 6px;
+    }
     .version {
       margin-top: 32px;
       padding-top: 12px;
@@ -88,6 +107,23 @@
     Emacs-initiated requests.  Hardcoded baseline menus (Org-capture and
     Org-roam-capture from selection) are always present and cannot be removed.
   </p>
+
+  <h2>Client label</h2>
+  <p class="help">
+    Display name Emacs uses for this install.  Leave blank to use the
+    browser's default (<code>chrome</code> or <code>firefox</code>).
+    Set to something distinctive like <code>chrome-work</code> when you
+    run two profiles at once so Emacs can address each without a
+    numeric suffix.  The persistent instance UUID below never changes
+    and lets Emacs recognise this same install across reconnects even
+    when the label collides with another connected client.
+  </p>
+  <div class="identity-row">
+    <input type="text" id="label" placeholder="Leave blank for browser default" spellcheck="false">
+    <button id="save-label">Save</button>
+    <button id="clear-label" class="secondary">Clear</button>
+  </div>
+  <div class="identity-uuid">instance: <span id="instance">…</span></div>
 
   <h2>Raise Emacs</h2>
   <p class="help">

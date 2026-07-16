@@ -19,9 +19,23 @@
 // directly).  Per-target glue is supplied through `options`:
 //
 //   options.clientName        REQUIRED string, e.g. "chrome" or
-//                             "firefox".  Sent in the first frame so
-//                             Emacs can address requests at a specific
-//                             browser when more than one is connected.
+//                             "firefox".  Identifies the KIND of
+//                             browser (used by Emacs for macOS
+//                             activation and app-name lookups); hard
+//                             coded per build.
+//   options.instance          REQUIRED string, per-install UUID from
+//                             src/identity.js.  Emacs uses it to
+//                             disambiguate collisions when two clients
+//                             share a label, and to recognise a
+//                             reconnect from the same install (so the
+//                             stale entry can be replaced instead of
+//                             accumulating suffixes).
+//   options.label             Optional string, user-visible display
+//                             name.  Defaults to options.clientName on
+//                             the wire when omitted.  Set from the
+//                             extension options page to distinguish
+//                             two Chrome profiles from each other, for
+//                             example.
 //   options.version           REQUIRED string, the extension's
 //                             manifest version.  Sent alongside the
 //                             client name; Emacs requires an exact
@@ -60,6 +74,13 @@ export function startWebSocketClient(options) {
   if (!options || typeof options.clientName !== "string" || !options.clientName) {
     throw new Error("startWebSocketClient: options.clientName (string) required");
   }
+  if (typeof options.instance !== "string" || !options.instance) {
+    throw new Error("startWebSocketClient: options.instance (string) required");
+  }
+  if (options.label !== undefined
+      && (typeof options.label !== "string" || !options.label)) {
+    throw new Error("startWebSocketClient: options.label, when given, must be a non-empty string");
+  }
   if (typeof options.version !== "string" || !options.version) {
     throw new Error("startWebSocketClient: options.version (string) required");
   }
@@ -73,7 +94,8 @@ export function startWebSocketClient(options) {
   const url             = options.url             ?? DEFAULT_URL;
   const reconnectMs     = options.reconnectMs     ?? DEFAULT_RECONNECT_MS;
   const requestTimeout  = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT;
-  const tag             = `[ws:${options.clientName}]`;
+  const displayName     = options.label ?? options.clientName;
+  const tag             = `[ws:${displayName}]`;
 
   let ws             = null;
   let reconnectTimer = null;
@@ -138,10 +160,23 @@ export function startWebSocketClient(options) {
     // the extension's version; an exact mismatch against the Emacs side
     // returns an error reply that we treat as terminal.
     try {
-      const reply = await sendRequest("CLIENT_HELLO", {
-        client:  options.clientName,
-        version: options.version,
-      });
+      // `label' is included only when the user has explicitly set
+      // one in the extension options page.  Defaulting to
+      // `clientName' here would rob the Emacs side of the ability
+      // to distinguish "user labeled this install 'chrome'" from
+      // "user has no label at all" — both would arrive as
+      // `label: "chrome"' and the registry-versus-user-intent
+      // logic in `browsel--handle-client-hello' could not tell
+      // which case applies.
+      const helloPayload = {
+        client:   options.clientName,
+        instance: options.instance,
+        version:  options.version,
+      };
+      if (options.label !== undefined) {
+        helloPayload.label = options.label;
+      }
+      const reply = await sendRequest("CLIENT_HELLO", helloPayload);
       if (reply && reply.status === "error") {
         const message = reply.message ?? "CLIENT_HELLO rejected";
         log("incompatible:", message);
@@ -152,7 +187,7 @@ export function startWebSocketClient(options) {
         try { ws.close(); } catch (e) { /* already closing */ }
         return;
       }
-      log("CLIENT_HELLO acknowledged as", options.clientName);
+      log("CLIENT_HELLO acknowledged as", reply?.client ?? displayName);
     } catch (e) {
       log("CLIENT_HELLO failed:", e?.message ?? e);
     }

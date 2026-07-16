@@ -261,6 +261,97 @@ keys and response shape are documented in =CONTRIBUTING.org=.
 (browsel-request "OPEN_TAB" '(:url "https://example.com"))
 #+end_src
 
+** API: Enumerating browsers and their tabs
+
+Two stable, higher-level functions sit on top of the raw request
+layer for the common case of "what's out there, and what tabs
+does it have?"  Downstream packages should build on these rather
+than call =browsel-request= directly, so upstream changes to the
+extension side stay invisible.
+
+*=browsel-browsers=* returns the currently-connected browsers as
+a list of plists.  Order matches =browsel-connected-clients=
+(newest connection first).
+
+#+begin_src emacs-lisp
+(browsel-browsers)
+;; => ((:name "chrome"  :instance "eef7ed26-8f17-…")
+;;     (:name "firefox" :instance "9cca5e87-87ac-…"))
+#+end_src
+
+Use =:name= when you need to talk to a browser right now (it's
+what =browsel-request= expects), and =:instance= when you need to
+recognise this same install across Emacs sessions
+(=browsel-clients-file= keeps the name → instance mapping
+stable, but a downstream package that wants to persist a
+reference of its own should key on the UUID).
+
+*=browsel-browser-tabs &optional BROWSERS=* returns open tabs
+from the selected browsers.
+
+- =nil= — every entry in =browsel-connected-clients=.
+- name string — that single browser only.
+- list of strings — every browser in the list.
+
+Signals =user-error= when no browser is connected, or when any
+requested name is not connected.  Each returned element is the
+extension's raw tab payload extended with two browsel-specific
+keys — =:browsel-browser= (the origin browser's name) and
+=:browsel-instance= (its per-install UUID) — so callers can route
+follow-up requests back to the right browser without a separate
+lookup.
+
+#+begin_src emacs-lisp
+;; Every tab from every connected browser.
+(browsel-browser-tabs)
+
+;; Only Chrome.
+(browsel-browser-tabs "chrome")
+
+;; Chrome + a Firefox-work profile.
+(browsel-browser-tabs '("chrome" "firefox-work"))
+
+;; Focus a tab back on the browser it came from.
+(dolist (tab (browsel-browser-tabs))
+  (when (string-match-p "example\\.com" (or (plist-get tab :url) ""))
+    (browsel-focus-tab tab t)))
+#+end_src
+
+*=browsel-focus-tab TAB &optional FOCUS-WINDOW=* switches the
+owning browser to TAB (a plist from =browsel-browser-tabs=).  It
+reads =:id= and =:browsel-browser= from TAB and dispatches
+=FOCUS_TAB= to the correct browser; FOCUS-WINDOW non-nil also
+raises the browser's OS window (and on macOS nudges the browser
+app itself when it is in =browsel-clients-needing-activation=).
+Signals =user-error= when TAB lacks either key or when its
+browser is disconnected.  Returns nil.
+
+#+begin_src emacs-lisp
+;; Focus every open tab whose title matches a regex.
+(dolist (tab (browsel-browser-tabs))
+  (when (string-match-p "Inbox" (or (plist-get tab :title) ""))
+    (browsel-focus-tab tab t)))
+#+end_src
+
+*=browsel-close-tab TAB=* closes TAB in its owning browser.
+Reads =:id= and =:browsel-browser= from TAB and dispatches
+=CLOSE_TAB=.  Signals =user-error= on missing keys or a
+disconnected browser.  Returns nil.  Bypasses in-page
+=beforeunload= prompts — those fire only on user-initiated
+closes — so pages with unsaved form state close silently.
+
+#+begin_src emacs-lisp
+;; Close every tab pointing at a specific host.
+(dolist (tab (browsel-browser-tabs))
+  (when (equal (url-host (url-generic-parse-url (or (plist-get tab :url) "")))
+               "example.com")
+    (browsel-close-tab tab)))
+#+end_src
+
+The tab manager uses these functions internally; see the
+[[Jump to a tab]] section for how the aggregated view is
+presented interactively.
+
 ** Quick helpers
 
 Three convenience commands wrap the most common
@@ -315,6 +406,57 @@ time by passing the client name explicitly:
 (browsel-org-link "firefox")
 (browsel-request "GET_ALL_TABS" nil "chrome")
 #+end_src
+
+** Client names and how they persist
+
+Each connected browser announces itself with a =CLIENT_HELLO= frame
+carrying three fields:
+
+- =client= — the build's kind: =chrome= or =firefox=.  Hard-coded
+  per build, immutable.  Emacs uses this for behaviour toggles
+  (which browser needs a macOS foreground nudge, which =.app= name
+  to =open -a=).
+- =instance= — a per-install UUID generated once on first
+  extension load and stored in the extension's =chrome.storage.local=.
+  Two profiles of the same browser get two distinct UUIDs because
+  storage is profile-scoped.  Reconnects preserve it.
+- =label= — the user-visible display name shown by
+  =browsel-connected-clients= and accepted by =browsel-default-client=.
+  Defaults to =client=; the extension's *Options* page has a text
+  input labelled *Client label* to override it (e.g. =chrome-work=,
+  =gmail=).
+
+*How the final name is chosen.*  When a hello arrives, Emacs picks
+the display name in this order:
+
+1. If the user has set a label, use it.  On collision with another
+   live client, append =-<first-6-hex>= of the instance UUID.
+2. Otherwise, if the instance is remembered in
+   =browsel-clients-file=, reuse the name it had last time.
+3. Otherwise, use the client kind (=chrome= / =firefox=), suffixing
+   with UUID hex if that kind is already taken.
+
+*Why the registry file exists.*  Two unlabelled installs of the
+same browser both want to be =chrome=; without a memory of past
+assignments, whichever one connects first would take the plain name
+and the other would get the suffix — and that order can flip
+between Emacs sessions, silently redirecting =browsel-default-client
+"chrome"= at a different install after a reboot.
+=browsel-clients-file= (default:
+=~/.emacs.d/browsel-clients.eld=) persists the =instance → name=
+mapping across sessions so the same install keeps its name
+regardless of connection order.  It follows the same convention as
+=savehist-file=, =recentf-save-file=, and =bookmark-default-file=:
+one elisp form, atomic write, safe to delete (repopulates on the
+next hello).  Setting =browsel-clients-file= to =nil= disables
+persistence.
+
+A relabel in the extension options page always wins over the
+registry — the new label takes effect on the next hello and is
+what gets remembered from then on.  If you want to run several
+installs of the same browser reliably, set a distinct label on
+each; the registry then only matters as a safety net for the
+default case.
 
 ** Route URLs through browsel
 

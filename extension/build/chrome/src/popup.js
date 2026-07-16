@@ -12,9 +12,16 @@ const messageEl   = document.getElementById("message");
 const customEl    = document.getElementById("custom-actions");
 const optionsLink = document.getElementById("options-link");
 const logoEl      = document.getElementById("logo");
+const identityNameEl     = document.getElementById("identity-name");
+const identityNameHintEl = document.getElementById("identity-name-hint");
+const identityUuidEl     = document.getElementById("identity-uuid");
 
 const LOGO_DEFAULT = "../icons/icon128.png";
 const LOGO_RED     = "../icons/icon-red-128.png";
+
+// Storage keys — must match identity.js and options.js.
+const IDENTITY_LABEL_KEY    = "browsel-label";
+const IDENTITY_INSTANCE_KEY = "browsel-instance";
 
 function isConsentLive(info) {
   return info?.state === "granted"
@@ -199,9 +206,24 @@ async function renderConsentedTabs() {
     row.appendChild(revoke);
 
     row.addEventListener("click", async () => {
-      await api.tabs.update(t.tabId, { active: true });
+      // A consented tab can be closed manually between popup render
+      // and click; without a catch the resulting promise rejection
+      // becomes an unhandled runtime error.  Explicitly consume
+      // `runtime.lastError' as well because Firefox stashes the
+      // error there even when the promise rejects properly.
+      try {
+        await api.tabs.update(t.tabId, { active: true });
+      } catch (e) {
+        void api.runtime.lastError;
+        setMessage(`Tab ${t.tabId} is no longer open`, true);
+        return;
+      }
       if (typeof t.windowId === "number") {
-        try { await api.windows.update(t.windowId, { focused: true }); } catch {}
+        try {
+          await api.windows.update(t.windowId, { focused: true });
+        } catch {
+          void api.runtime.lastError;
+        }
       }
       window.close();
     });
@@ -300,6 +322,34 @@ async function applyShortcutHints() {
   });
 }
 
+// ── Identity block (name + uuid) ────────────────────────────────────────────
+//
+// Reads the storage keys populated by src/identity.js and shows the
+// name Emacs will see plus the persistent instance UUID.  When the
+// label is unset, the effective name is the build's clientName —
+// detected via the `browser` global (Firefox exposes it natively;
+// Chrome does not, absent a polyfill).  This is the same heuristic
+// the top-of-file `api` picker uses, so the popup stays consistent
+// with itself.
+
+const IS_FIREFOX          = typeof browser !== "undefined";
+const DEFAULT_CLIENT_NAME = IS_FIREFOX ? "firefox" : "chrome";
+
+async function renderIdentity() {
+  const stored = await api.storage.local.get([IDENTITY_LABEL_KEY,
+                                              IDENTITY_INSTANCE_KEY]);
+  const label    = stored[IDENTITY_LABEL_KEY];
+  const instance = stored[IDENTITY_INSTANCE_KEY];
+  const isLabelSet = typeof label === "string" && label.length > 0;
+
+  identityNameEl.textContent = isLabelSet ? label : DEFAULT_CLIENT_NAME;
+  identityNameHintEl.textContent = isLabelSet
+    ? ""
+    : "(default — set a label to run multiple)";
+  identityUuidEl.textContent = instance
+    || "(not yet generated — reconnect the extension once)";
+}
+
 // ── Live status updates from the service worker ─────────────────────────────
 
 api.runtime.onMessage.addListener((msg) => {
@@ -315,3 +365,4 @@ sendToBackground({ target: "service-worker", type: "WS_STATUS_QUERY" })
 renderActions().then(applyShortcutHints);
 renderConsent();
 renderConsentedTabs();
+renderIdentity();

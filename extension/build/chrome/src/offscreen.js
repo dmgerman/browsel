@@ -40,35 +40,51 @@ function dispatchIncomingViaServiceWorker(request) {
 
 // Offscreen documents expose only the messaging subset of
 // chrome.runtime — `getManifest` is not in that subset, so we ask the
-// service worker for the extension's version.  Top-level await on an
-// ES module delays the rest of this file until the SW responds, which
-// is acceptable here because the SW's onMessage listener is registered
+// service worker for the extension's version.  Identity (the
+// persistent per-install UUID and the optional user-set label) is
+// fetched through the SW for the same reason: routing storage access
+// through one owner avoids a race where SW and offscreen would both
+// try to create the initial UUID.  Top-level await on an ES module
+// delays the rest of this file until the SW responds, which is
+// acceptable here because the SW's onMessage listener is registered
 // synchronously at SW boot and is reachable as soon as this document
 // has been created.
-function fetchVersionFromServiceWorker() {
+function askServiceWorker(type) {
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage(
-      { target: "service-worker", type: "GET_VERSION" },
+      { target: "service-worker", type },
       (response) => {
         if (chrome.runtime.lastError) {
           reject(new Error(chrome.runtime.lastError.message));
           return;
         }
-        if (!response?.version) {
-          reject(new Error("service worker returned no version"));
+        if (!response) {
+          reject(new Error(`service worker returned no response for ${type}`));
           return;
         }
-        resolve(response.version);
+        if (response.error) {
+          reject(new Error(response.error));
+          return;
+        }
+        resolve(response);
       },
     );
   });
 }
 
-const version = await fetchVersionFromServiceWorker();
-log("starting ws client at version", version);
+const versionResponse  = await askServiceWorker("GET_VERSION");
+const identityResponse = await askServiceWorker("GET_IDENTITY");
+const version  = versionResponse.version;
+const instance = identityResponse.instance;
+const label    = identityResponse.label;
+log("starting ws client at version", version,
+    "instance", instance,
+    label ? `label ${label}` : "no label");
 
 const client = startWebSocketClient({
   clientName: "chrome",
+  instance,
+  label,
   version,
   onStatus: (status) => {
     chrome.runtime

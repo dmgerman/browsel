@@ -68,12 +68,39 @@
 (require 'subr-x)
 (require 'seq)
 
+;; Soft-require: when consult is loaded we use `consult--read' so the
+;; user's `consult-narrow-key' becomes the per-client filter shortcut.
+;; When it isn't, we fall through to `completing-read' and the client
+;; name in the display line is still typable as a filter.
+(require 'consult nil t)
+(declare-function consult--read "ext:consult" (table &rest options))
+;; `consult--narrow' is bound buffer-locally by consult in the
+;; minibuffer to the active narrow character (or nil when widened).
+;; Our narrow predicate closes over it at read time; declaring it
+;; special keeps the byte-compiler quiet when consult isn't loaded
+;; at compile time.
+(defvar consult--narrow)
+
+;; Vertico is a hard dependency: the anchor-restore path (M-k) reads
+;; `vertico--index' and `vertico--candidates' directly, so those
+;; symbols must be resolvable at both compile and run time.
+(require 'vertico)
+
 ;; ── Configuration ────────────────────────────────────────────────────────────
 
 (defcustom browsel-tab-manager-domain-column-width 30
   "Width of the domain column in jump-to-tab completion candidates.
 Domains longer than this are truncated with `…'; shorter ones get
 padded with spaces so titles align across rows."
+  :type 'integer
+  :group 'browsel)
+
+(defcustom browsel-tab-manager-client-column-width 10
+  "Width of the client column in jump-to-tab completion candidates.
+Only shown when two or more clients are connected; a single client
+means the column is redundant noise and is suppressed.  Client names
+longer than this width are truncated with `…' (e.g. a user label
+`chrome-work-personal' → `chrome-wo…')."
   :type 'integer
   :group 'browsel)
 
@@ -110,6 +137,12 @@ its own count-based confirmation."
   "Face for the `[asi]' flag prefix in jump-to-tab candidates."
   :group 'browsel)
 
+(defface browsel-tab-manager-client-face
+  '((t :inherit font-lock-type-face))
+  "Face for the client column in jump-to-tab candidates.
+Only rendered when two or more clients are connected."
+  :group 'browsel)
+
 (defface browsel-tab-manager-domain-face
   '((t :inherit font-lock-keyword-face))
   "Face for the domain column in jump-to-tab candidates."
@@ -140,16 +173,21 @@ Three columns, lowercase letter if the flag is set, space otherwise:
           (if (plist-get tab :audible)   ?s ?\s)
           (if (plist-get tab :incognito) ?i ?\s)))
 
-(defun browsel-tab-manager--display-base (tab)
+(defun browsel-tab-manager--display-base (tab show-client)
   "Return the propertized display string for TAB.
-Format is `[asi] DOMAIN  TITLE' where each segment carries its own
-face (`browsel-tab-manager-flags-face',
+Format is `[CLIENT ]?[asi] DOMAIN  TITLE' where each segment carries
+its own face (`browsel-tab-manager-client-face',
+`browsel-tab-manager-flags-face',
 `browsel-tab-manager-domain-face',
 `browsel-tab-manager-title-face') so they are visually distinct.
 The domain is padded or truncated to
 `browsel-tab-manager-domain-column-width' so titles line up across
 rows.  Two spaces separate the columns — a single space inside the
-domain padding would blend with truncated-but-fits values."
+domain padding would blend with truncated-but-fits values.
+SHOW-CLIENT non-nil prepends the tab's `:browsel-browser' name,
+padded to `browsel-tab-manager-client-column-width'; when only one
+client is connected the caller passes nil and the column is
+suppressed entirely."
   (let* ((flags  (propertize (browsel-tab-manager--flags tab)
                              'face 'browsel-tab-manager-flags-face))
          (host   (browsel-tab-manager--url-host (plist-get tab :url)))
@@ -159,17 +197,29 @@ domain padding would blend with truncated-but-fits values."
                    0 ?\s "…")
                   'face 'browsel-tab-manager-domain-face))
          (title  (propertize (or (plist-get tab :title) "(no title)")
-                             'face 'browsel-tab-manager-title-face)))
-    (concat flags " " domain "  " title)))
+                             'face 'browsel-tab-manager-title-face))
+         (base   (concat flags " " domain "  " title)))
+    (if show-client
+        (let ((client (propertize
+                       (truncate-string-to-width
+                        (or (plist-get tab :browsel-browser) "?")
+                        browsel-tab-manager-client-column-width
+                        0 ?\s "…")
+                       'face 'browsel-tab-manager-client-face)))
+          (concat client " " base))
+      base)))
 
-(defun browsel-tab-manager--candidates (tabs)
+(defun browsel-tab-manager--candidates (tabs show-client)
   "Return an alist of (DISPLAY . TAB) pairs for TABS.
-DISPLAY is the propertized `[asi] DOMAIN  TITLE' string from
+DISPLAY is the propertized string from
 `browsel-tab-manager--display-base'; bases that would collide
 \(`equal' compares the underlying text only) get a propertized
 \" (#ID)\" suffix in the flags face so each completion key is
-unique without distorting the column alignment."
-  (let ((bases (mapcar #'browsel-tab-manager--display-base tabs)))
+unique without distorting the column alignment.  SHOW-CLIENT is
+forwarded to `browsel-tab-manager--display-base'."
+  (let ((bases (mapcar (lambda (tab)
+                         (browsel-tab-manager--display-base tab show-client))
+                       tabs)))
     (cl-mapcar
      (lambda (tab base)
        (cons (if (> (cl-count base bases :test #'equal) 1)
@@ -219,7 +269,17 @@ through unchanged."
 `completing-read' otherwise sorts candidates alphabetically; the
 `display-sort-function' metadata tells modern completion frontends
 \(vertico, icomplete, the default minibuffer) to keep the MRU order
-the caller produced."
+the caller produced.
+
+Note: no `group-function' metadata is set on purpose.  Vertico's
+`vertico--group-by' reorders candidates so each group is
+contiguous whenever `group-function' metadata is present — and
+that reordering happens even with `vertico-group-format' bound to
+nil (which only suppresses the visual headers).  That would
+collapse cross-client MRU back into per-client MRU.  Narrowing to
+one client belongs in the consult-integrated path, where the
+per-tab `:browsel-browser' is read directly by a narrow predicate
+that does not need group-function metadata."
   (lambda (string pred action)
     (if (eq action 'metadata)
         '(metadata (display-sort-function . identity)
@@ -259,47 +319,87 @@ keeper; the others end up in the returned list."
 
 ;; ── Public commands ─────────────────────────────────────────────────────────
 
+(defun browsel-tab-manager--close-duplicates-in (client)
+  "Compute duplicate victims for CLIENT and return (CLIENT VICTIMS...) plist.
+Fetches CLIENT's tabs, applies `browsel-tab-manager--duplicate-victims',
+and returns a plist so the caller can render a total and confirm
+once across every client rather than prompting per browser."
+  (let ((tabs (condition-case err
+                  (browsel-request "GET_ALL_TABS" nil client)
+                (error
+                 (message "browsel-tab-manager: %s failed: %s"
+                          client (error-message-string err))
+                 nil))))
+    (list :client client
+          :victims (and tabs (browsel-tab-manager--duplicate-victims tabs)))))
+
 ;;;###autoload
-(defun browsel-tab-manager-close-duplicates ()
-  "Close duplicate tabs in the connected browser, keeping the most recent.
-Two tabs are duplicates when their URLs match after stripping any
-`#...' fragment; query parameters (`?a=...') are preserved.  Pinned
-tabs are skipped — never compared, never closed.  In each duplicate
-group the tab with the highest `lastAccessed' is kept and the rest
-are closed.  Prompts for confirmation with a count before closing
-anything.
+(defun browsel-tab-manager-close-duplicates (&optional clients)
+  "Close duplicate tabs in every connected browser, keeping the most recent.
+Runs the duplicate sweep per client — two tabs at the same URL in
+different browsers are not considered duplicates.  Two tabs are
+duplicates when their URLs match after stripping any `#...' fragment;
+query parameters (`?a=...') are preserved.  Pinned tabs are skipped —
+never compared, never closed.  In each duplicate group the tab with
+the highest `lastAccessed' is kept and the rest are closed.  Prompts
+for confirmation once with a per-client breakdown of the counts
+before closing anything.
+
+CLIENTS narrows the sweep:
+  - nil          — every connected browser.
+  - name string  — that single browser only.
+  - list of strings — every browser in the list.
+Signals `user-error' when any requested name is not connected.
+
+Interactively, a prefix argument prompts via `completing-read'
+for a single browser; no prefix sweeps every connected browser.
 
 Note: `chrome.tabs.remove' bypasses any in-page `beforeunload' prompt
 \(those only fire from user-initiated UI closes\); pages with unsaved
 form state close without a dialog.  Firefox behaves the same way."
-  (interactive)
-  (let* ((client  (browsel--read-client-interactive))
-         (tabs    (browsel-request "GET_ALL_TABS" nil client))
-         (victims (browsel-tab-manager--duplicate-victims tabs))
-         (n       (length victims)))
+  (interactive
+   (list (browsel-tab-manager--maybe-prompt-client)))
+  (let* ((clients (browsel--normalize-browsers clients))
+         (plans   (mapcar #'browsel-tab-manager--close-duplicates-in clients))
+         (total   (apply #'+ (mapcar
+                              (lambda (p) (length (plist-get p :victims)))
+                              plans)))
+         (summary (mapconcat
+                   (lambda (p)
+                     (format "%s: %d"
+                             (plist-get p :client)
+                             (length (plist-get p :victims))))
+                   plans ", ")))
     (cond
-     ((zerop n)
-      (message "browsel-tab-manager: no duplicate tabs in %s" client))
-     ((not (y-or-n-p (format "Close %d duplicate tab(s) in %s? " n client)))
-      (message "browsel-tab-manager: aborted (would have closed %d)" n))
+     ((zerop total)
+      (message "browsel-tab-manager: no duplicate tabs (%s)" summary))
+     ((not (y-or-n-p (format "Close %d duplicate tab(s) [%s]? "
+                             total summary)))
+      (message "browsel-tab-manager: aborted (would have closed %d)" total))
      (t
-      (let ((outcomes (mapcar
-                       (lambda (tab)
-                         (condition-case err
-                             (progn
-                               (browsel-request "CLOSE_TAB"
-                                                (list :id (plist-get tab :id))
-                                                client)
-                               t)
-                           (error
-                            (message "Could not close tab %s (%s): %s"
-                                     (plist-get tab :id)
-                                     (plist-get tab :url)
-                                     (error-message-string err))
-                            nil)))
-                       victims)))
-        (message "browsel-tab-manager: closed %d/%d duplicate tab(s) in %s"
-                 (seq-count #'identity outcomes) n client))))))
+      (dolist (plan plans)
+        (let* ((client   (plist-get plan :client))
+               (victims  (plist-get plan :victims))
+               (n        (length victims))
+               (outcomes (mapcar
+                          (lambda (tab)
+                            (condition-case err
+                                (progn
+                                  (browsel-request "CLOSE_TAB"
+                                                   (list :id (plist-get tab :id))
+                                                   client)
+                                  t)
+                              (error
+                               (message "Could not close tab %s (%s) in %s: %s"
+                                        (plist-get tab :id)
+                                        (plist-get tab :url)
+                                        client
+                                        (error-message-string err))
+                               nil)))
+                          victims)))
+          (when (> n 0)
+            (message "browsel-tab-manager: closed %d/%d duplicate tab(s) in %s"
+                     (seq-count #'identity outcomes) n client))))))))
 
 
 ;; ── In-prompt action keys for jump-to-tab ──────────────────────────────────
@@ -322,12 +422,6 @@ form state close without a dialog.  Firefox behaves the same way."
 Bound by `browsel-tab-manager' for the duration of the
 `completing-read' call so the in-prompt action commands can look up
 the tab plist that backs the highlighted display string.")
-
-(defvar browsel-tab-manager--current-client nil
-  "Dynamic binding: connected client name for the active prompt.
-Bound alongside `browsel-tab-manager--current-alist' so in-prompt
-action commands (close, copy) target the same browser the prompt was
-opened against, without re-resolving the client mid-completion.")
 
 (defvar browsel-tab-manager--current-sort nil
   "Dynamic binding: sort key the active prompt is showing.
@@ -389,10 +483,13 @@ through `try-completion'."
 (defun browsel-tab-manager-jump-show-tab ()
   "Make the highlighted tab the active tab in its browser window.
 Calls `FOCUS_TAB' without `:focusWindow' so the tab becomes visible
-inside Chrome but the OS-level window is not raised — Emacs keeps
-focus.  After the FOCUS_TAB call the prompt re-enters with fresh
-tabs so the `[a]' flag reflects the new active tab; the highlight
-stays on the shown candidate and any typed filter is preserved."
+inside its browser but the OS-level window is not raised — Emacs
+keeps focus.  The request is routed to the tab's own
+`:browsel-browser', so this works uniformly whether the highlighted
+row came from Chrome or Firefox.  After the FOCUS_TAB call the
+prompt re-enters with fresh tabs so the `[a]' flag reflects the
+new active tab; the highlight stays on the shown candidate and any
+typed filter is preserved."
   (interactive)
   (let ((tab (browsel-tab-manager--current-tab)))
     (if (null tab)
@@ -401,7 +498,7 @@ stays on the shown candidate and any typed filter is preserved."
           (progn
             (browsel-request "FOCUS_TAB"
                              `(:id ,(plist-get tab :id))
-                             browsel-tab-manager--current-client)
+                             (plist-get tab :browsel-browser))
             (throw 'browsel-tab-manager--cycle
                    (list :sort   browsel-tab-manager--current-sort
                          :input  (minibuffer-contents-no-properties)
@@ -461,7 +558,7 @@ current sort key and tail-recurses."
           (progn
             (browsel-request "CLOSE_TAB"
                              `(:id ,(plist-get tab :id))
-                             browsel-tab-manager--current-client)
+                             (plist-get tab :browsel-browser))
             (unless browsel-tab-manager-confirm-close
               (throw 'browsel-tab-manager--cycle
                      (list :sort   browsel-tab-manager--current-sort
@@ -543,29 +640,150 @@ filter has excluded it."
            (when (and idx (>= idx 0))
              (vertico--goto idx))))))))
 
-(defun browsel-tab-manager--run-prompt (client sort &optional initial-input anchor)
-  "Run one jump-to-tab prompt under SORT for CLIENT and dispatch.
+;; ── Consult narrowing (optional) ───────────────────────────────────────────
+;;
+;; When consult is loaded, the tab prompt goes through `consult--read'
+;; with a `:narrow' config so the user's `consult-narrow-key' (e.g.
+;; `C-=') filters candidates to one client with a single keystroke.
+;; The narrow predicate reads `:browsel-browser' directly from each
+;; tab plist, so no group-function metadata is exposed to the
+;; completion machinery — vertico only reorders candidates
+;; contiguously by group when it sees `group-function' metadata, and
+;; that reordering would collapse cross-client MRU into per-client
+;; MRU regardless of `vertico-group-format'.  The per-row client
+;; column already tells the user which browser owns each tab.
+
+(defun browsel-tab-manager--narrow-config (clients)
+  "Build a narrow spec for CLIENTS as a plist.
+Returns `(:config ((KEY . CLIENT) ...) :unreachable (CLIENT ...))'.
+KEY is the first character of CLIENT.  When two clients share a
+first character, the earlier one keeps the key and the later one
+lands in `:unreachable' — the caller warns so the user can rename
+their label or accept that narrowing is one-key coverage."
+  (seq-reduce
+   (lambda (acc client)
+     (let ((key     (and (stringp client)
+                         (> (length client) 0)
+                         (aref client 0)))
+           (config  (plist-get acc :config))
+           (unreach (plist-get acc :unreachable)))
+       (cond
+        ((null key)         acc)
+        ((assq key config)  (list :config config
+                                  :unreachable (append unreach (list client))))
+        (t                  (list :config (append config
+                                                  (list (cons key client)))
+                                  :unreachable unreach)))))
+   clients
+   (list :config nil :unreachable nil)))
+
+(defun browsel-tab-manager--read-tab (prompt alist initial-input clients setup-fn)
+  "Read a tab display string, using consult when available.
+PROMPT and INITIAL-INPUT are passed through to the underlying
+reader.  ALIST is the (DISPLAY . TAB) alist that also backs the
+completion table.  CLIENTS is the list of client names represented
+in ALIST; used to build the narrow spec.  SETUP-FN runs inside
+`minibuffer-with-setup-hook'.  Returns the picked display string,
+or nil on quit.
+
+The consult path deliberately omits `:group' so vertico does not
+reorder candidates by client — global MRU survives.  Narrowing
+uses a predicate that reads `:browsel-browser' from each tab
+plist, so it works without group-function metadata."
+  (let ((table (browsel-tab-manager--completion-table alist)))
+    (if (fboundp 'consult--read)
+        (let* ((cfg      (browsel-tab-manager--narrow-config clients))
+               (keys     (plist-get cfg :config))
+               (unreach  (plist-get cfg :unreachable))
+               ;; Consult calls this on each candidate while narrowing
+               ;; is active.  `consult--narrow' holds the active char
+               ;; (e.g. ?c); we look up its client name in KEYS and
+               ;; keep candidates whose tab belongs to it.
+               ;;
+               ;; CAND's shape depends on how the completion machinery
+               ;; enumerates the alist: `complete-with-action' passes
+               ;; each entry as a (DISPLAY . TAB) cons, while some
+               ;; frontends flatten to just the display string.
+               ;; Handle both so the predicate is robust to either
+               ;; path.  Consult disables the predicate when
+               ;; narrowing is widened, so we never see nil narrow.
+               ;;
+               ;; The predicate reads `:browsel-browser' directly from
+               ;; the tab plist — no dependency on group-function
+               ;; metadata.  That is deliberate: setting `:group' on
+               ;; the consult--read call would make vertico's
+               ;; `vertico--group-by' re-order candidates so each
+               ;; client is contiguous (see vertico.el:289), which
+               ;; would break the global MRU sort.
+               ;; `vertico-group-format' only hides the group
+               ;; headers; it does not disable the reordering.  So
+               ;; the fix is not to set `:group' at all.
+               (narrow-pred
+                (lambda (cand)
+                  (let ((tab (cond ((consp cand)   (cdr cand))
+                                   ((stringp cand) (cdr (assoc cand alist))))))
+                    (and tab
+                         (equal (plist-get tab :browsel-browser)
+                                (alist-get consult--narrow keys)))))))
+          (when unreach
+            (message
+             "browsel-tab-manager: no narrow key for %s \
+\(first-letter collision); rename the client label to distinguish"
+             (mapconcat #'identity unreach ", ")))
+          (minibuffer-with-setup-hook (:append setup-fn)
+            (consult--read table
+                           :prompt        prompt
+                           :require-match t
+                           :sort          nil
+                           :initial       (and (stringp initial-input)
+                                               (not (string-empty-p initial-input))
+                                               initial-input)
+                           :narrow        (list :keys keys
+                                                :predicate narrow-pred)
+                           :category      'browsel-tab)))
+      (minibuffer-with-setup-hook (:append setup-fn)
+        (completing-read prompt table nil t
+                         (and (stringp initial-input)
+                              (not (string-empty-p initial-input))
+                              initial-input))))))
+
+(defun browsel-tab-manager--run-prompt (sort &optional initial-input anchor clients)
+  "Run one jump-to-tab prompt under SORT across the selected clients.
 Each call fetches a fresh `GET_ALL_TABS' so closures and reorderings
-between prompts (e.g. after `M-k') are reflected immediately.
+between prompts (e.g. after `M-k') are reflected immediately.  Each
+row's `:browsel-browser' names the browser it came from — actions
+route back to it, so a mixed Chrome/Firefox prompt Just Works.  The
+client column is rendered only when two or more clients are
+represented in the current result.
+
 INITIAL-INPUT, when a non-empty string, pre-fills the minibuffer.
-ANCHOR, when a non-nil display string, becomes the candidate the
-highlight lands on after vertico has refreshed — used by `M-k' to
-keep the user one row above where the closed tab was.  When `M-k'
-or `C-t' throw, the in-prompt command sends a plist
+ANCHOR, when a non-nil tab id, becomes the candidate the highlight
+lands on after vertico has refreshed — used by `M-k' to keep the
+user one row above where the closed tab was.  CLIENTS, when
+non-nil, restricts the prompt: nil aggregates every connected
+client; a string names one; a list of strings names several.
+When `M-k' or `C-t' throw, the in-prompt command sends a plist
 \(:sort :input :anchor) to `browsel-tab-manager--cycle' and this
-function tail-recurses with it; otherwise it focuses the chosen
-tab and returns."
-  (let* ((tabs (browsel-request "GET_ALL_TABS" nil client)))
-    (unless (and (listp tabs) tabs)
-      (user-error "Browsel-tab-manager: no tabs returned from %s" client))
-    (let* ((sorted (browsel-tab-manager--sort-tabs tabs sort))
-           (alist  (browsel-tab-manager--candidates sorted))
-           (browsel-tab-manager--current-alist  alist)
-           (browsel-tab-manager--current-client client)
-           (browsel-tab-manager--current-sort   sort)
+function tail-recurses with it, carrying CLIENTS along so the
+restriction persists across cycles; otherwise it focuses the
+chosen tab and returns."
+  (let* ((tabs (browsel-browser-tabs clients)))
+    (unless tabs
+      (user-error "Browsel-tab-manager: no tabs returned from any client"))
+    (let* ((clients      (delete-dups
+                          (mapcar (lambda (tab) (plist-get tab :browsel-browser))
+                                  tabs)))
+           (show-client  (> (length clients) 1))
+           (sorted       (browsel-tab-manager--sort-tabs tabs sort))
+           (alist        (browsel-tab-manager--candidates sorted show-client))
+           (browsel-tab-manager--current-alist alist)
+           (browsel-tab-manager--current-sort  sort)
            (setup-fn (lambda ()
                        (browsel-tab-manager--install-keys)
                        (browsel-tab-manager--jump-to-anchor anchor)))
+           (prompt   (format "Tab [%s] (%s): "
+                             sort
+                             (mapconcat #'identity clients ", ")))
            (next
             ;; `catch' captures the non-local-exit signals from the
             ;; in-prompt action commands (M-k / M-RET / C-t); errors
@@ -575,21 +793,16 @@ tab and returns."
             ;; on Emacs's top-level handler.
             (catch 'browsel-tab-manager--cycle
               (condition-case err
-                  (let* ((pick (minibuffer-with-setup-hook (:append setup-fn)
-                                 (completing-read
-                                  (format "Tab [%s] (%s): " sort client)
-                                  (browsel-tab-manager--completion-table alist)
-                                  nil t
-                                  (and (stringp initial-input)
-                                       (not (string-empty-p initial-input))
-                                       initial-input))))
+                  (let* ((pick (browsel-tab-manager--read-tab
+                                prompt alist initial-input clients setup-fn))
                          ;; Some completion frontends strip text
                          ;; properties on exit (vertico) while others
                          ;; preserve them; look up under both.
                          (key  (and (stringp pick)
                                     (substring-no-properties pick)))
                          (tab  (or (cdr (assoc key  alist))
-                                   (cdr (assoc pick alist)))))
+                                   (cdr (assoc pick alist))))
+                         (client (and tab (plist-get tab :browsel-browser))))
                     (unless tab
                       (user-error "Browsel-tab-manager: no tab matches %S"
                                   pick))
@@ -603,10 +816,10 @@ tab and returns."
                           (error-message-string err))
                  nil)))))
       (when (browsel-tab-manager--valid-next-p next)
-        (browsel-tab-manager--run-prompt client
-                                         (plist-get next :sort)
+        (browsel-tab-manager--run-prompt (plist-get next :sort)
                                          (plist-get next :input)
-                                         (plist-get next :anchor))))))
+                                         (plist-get next :anchor)
+                                         clients)))))
 
 (defun browsel-tab-manager--valid-next-p (next)
   "Return non-nil when NEXT is a plist shaped like our throw protocol.
@@ -620,24 +833,59 @@ keyword and that contains a `:sort' key our sort cycle recognizes."
        (memq (plist-get next :sort) browsel-tab-manager--sort-cycle)))
 
 ;;;###autoload
-(defun browsel-tab-manager ()
-  "Focus a tab in the connected browser, picked via completion.
-Lists every open tab from the resolved client (see
-`browsel-default-client').
+(defun browsel-tab-manager (&optional clients)
+  "Focus a tab in any connected browser, picked via completion.
+By default, aggregates tabs from every entry in
+`browsel-connected-clients' into one list —
+`browsel-default-client' is intentionally ignored so the
+interactive command always shows everything.  When two or more
+clients are represented, each row starts with a client column so
+the origin browser is visible at a glance; the consult path
+offers `consult-narrow' so a single keystroke filters the prompt
+to one browser.
+
+CLIENTS narrows the tab list:
+  - nil          — aggregate every connected client (interactive default).
+  - name string  — that single browser only.
+  - list of strings — every browser in the list.
+Client names are session-unique — see `browsel-clients-file' for
+the persistence that keeps them stable across Emacs restarts —
+so passing one or several is a deterministic selector.  Signals
+`user-error' when any requested name is not connected.
+
+Interactively, a prefix argument prompts via `completing-read'
+for a single browser from `browsel-connected-clients'; no prefix
+aggregates all.
+
 The initial sort order comes from `browsel-tab-manager-sort'
 \(default `mru'); use `C-t' inside the prompt to cycle through
 mru / title / domain / window orders.  RET focuses the chosen tab
-and its parent window via the extension's FOCUS_TAB handler.
+and its parent window via the extension's FOCUS_TAB handler —
+routed to whichever client that tab came from.
 
 In-prompt keys (see also `?' inside the prompt):
   ?       legend + action-key help
   \\[browsel-tab-manager-jump-copy-url]   copy the highlighted candidate's URL to the kill ring
   \\[browsel-tab-manager-jump-close-tab]     close the highlighted candidate's tab and stay in the prompt
-  \\[browsel-tab-manager-jump-show-tab]   show the highlighted tab in Chrome without raising its window
+  \\[browsel-tab-manager-jump-show-tab]   show the highlighted tab in its browser without raising the window
   \\[browsel-tab-manager-jump-cycle-sort]     cycle the sort order"
-  (interactive)
-  (browsel-tab-manager--run-prompt (browsel--read-client-interactive)
-                                   browsel-tab-manager-sort))
+  (interactive
+   (list (browsel-tab-manager--maybe-prompt-client)))
+  (browsel-tab-manager--run-prompt browsel-tab-manager-sort nil nil clients))
+
+(defun browsel-tab-manager--maybe-prompt-client ()
+  "Return a client name (via `completing-read') when a prefix arg is active.
+No prefix returns nil so callers aggregate every connected client.
+Signals `user-error' when no client is connected in the prefix
+path.  Does not consult `browsel-default-client' — the tab
+manager is aggregation-by-default and the prompt is an explicit
+narrowing gesture."
+  (when current-prefix-arg
+    (let ((connected (browsel-connected-clients)))
+      (unless connected
+        (user-error "Browsel-tab-manager: no client connected"))
+      (completing-read "Browser: " connected nil t nil nil
+                       (car connected)))))
 
 (provide 'browsel-tab-manager)
 

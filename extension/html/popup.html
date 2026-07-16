@@ -122,6 +122,38 @@
       border-radius: 3px; cursor: pointer; flex-shrink: 0;
     }
     .ctab button.revoke:hover { background: #fcc; }
+    .identity {
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      gap: 2px 8px;
+      align-items: baseline;
+      margin-bottom: 12px;
+      padding: 6px 8px;
+      background: #fafafa;
+      border: 1px solid #eee;
+      border-radius: 4px;
+    }
+    .identity .label {
+      font-size: 10px;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .identity .value {
+      font-size: 12px;
+      color: #222;
+      word-break: break-all;
+    }
+    .identity .uuid {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 11px;
+    }
+    .identity .default-hint {
+      color: #999;
+      font-size: 11px;
+      font-style: italic;
+      margin-left: 4px;
+    }
     #message { font-size: 11px; color: #555; margin-top: 8px; min-height: 16px; }
     #options-link {
       display: inline-block;
@@ -143,6 +175,15 @@
   <div class="status-row">
     <div id="dot" class="dot disconnected"></div>
     <div id="status-text" class="status-text">Disconnected</div>
+  </div>
+
+  <div id="identity" class="identity">
+    <span class="label">name</span>
+    <span class="value">
+      <span id="identity-name">…</span><span id="identity-name-hint" class="default-hint"></span>
+    </span>
+    <span class="label">uuid</span>
+    <span id="identity-uuid" class="value uuid">…</span>
   </div>
 
   <div id="consent-line" class="consent-line">

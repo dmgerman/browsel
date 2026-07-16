@@ -40,6 +40,8 @@ MANIFEST_BUILDER := scripts/build-manifest.py
 SHARED_FILES := config.json \
                 src/core.js \
                 src/ws-client.js \
+                src/identity.js \
+                src/focus-tracker.js \
                 src/handlers.js \
                 src/payload.js \
                 src/consent.js \

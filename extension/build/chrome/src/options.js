@@ -13,6 +13,8 @@ versionEl.textContent = `v${api.runtime.getManifest().version}`;
 const handlersEl = document.getElementById("handlers");
 const statusEl   = document.getElementById("status");
 const raiseBody  = document.querySelector("#raise-table tbody");
+const labelEl    = document.getElementById("label");
+const instanceEl = document.getElementById("instance");
 
 function setStatus(text, kind) {
   statusEl.textContent = text;
@@ -129,6 +131,44 @@ document.getElementById("reset-raise").addEventListener("click", async () => {
   setStatus("Cleared raise overrides; each menu now follows its config default.", "ok");
 });
 
+// ── Client label + instance UUID ────────────────────────────────────────────
+//
+// The label is a user-settable display name sent in CLIENT_HELLO and
+// used by Emacs to distinguish concurrent clients (e.g. two Chrome
+// profiles connected at once).  Empty label = fall back to the
+// build's clientName ("chrome"/"firefox") on the wire.
+//
+// The instance UUID is generated once by src/identity.js and shown
+// here read-only so the user can identify this install without
+// digging into storage.
+
+const LABEL_KEY    = "browsel-label";
+const INSTANCE_KEY = "browsel-instance";
+
+async function renderIdentity() {
+  const stored = await api.storage.local.get([LABEL_KEY, INSTANCE_KEY]);
+  labelEl.value          = stored[LABEL_KEY]    ?? "";
+  instanceEl.textContent = stored[INSTANCE_KEY] ?? "(not yet generated — start the extension once)";
+}
+
+document.getElementById("save-label").addEventListener("click", async () => {
+  const value = labelEl.value.trim();
+  if (value === "") {
+    await api.storage.local.remove([LABEL_KEY]);
+    setStatus("Cleared label; will use browser default.", "ok");
+  } else {
+    await api.storage.local.set({ [LABEL_KEY]: value });
+    setStatus(`Saved label: ${value}. Reconnect the extension to take effect.`, "ok");
+  }
+  await renderIdentity();
+});
+
+document.getElementById("clear-label").addEventListener("click", async () => {
+  await api.storage.local.remove([LABEL_KEY]);
+  await renderIdentity();
+  setStatus("Cleared label; will use browser default.", "ok");
+});
+
 // ── Boot ────────────────────────────────────────────────────────────────────
 
 async function loadCurrent() {
@@ -137,6 +177,7 @@ async function loadCurrent() {
   menusEl.value    = format(stored.menus    ?? bundled.menus);
   handlersEl.value = format(stored.handlers ?? bundled.handlers);
   await renderRaiseTable();
+  await renderIdentity();
   setStatus("");
 }
 

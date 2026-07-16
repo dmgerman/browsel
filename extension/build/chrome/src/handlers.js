@@ -22,8 +22,32 @@
 
 import { ensureConsent, tabHasConsent } from "./consent.js";
 import { evalAvailable, evalUnavailableMessage, evalInTab } from "./eval-impl.js";
+import { activeTabTimestamp } from "./focus-tracker.js";
 
 const api = (typeof browser !== "undefined") ? browser : chrome;
+
+// Firefox has a persistent quirk: when a `tabs.update' / `tabs.remove'
+// / `tabs.get' call rejects (e.g. "No tab with id: N" because the id
+// went stale between fetch and action), the underlying implementation
+// still stashes the error into `runtime.lastError' and nothing in the
+// Firefox path ever reads it — so the console gets an
+// "Unchecked runtime.lastError" line even though our own code
+// properly awaits the promise and catches the rejection.  This
+// wrapper explicitly touches `api.runtime.lastError' inside the
+// catch, which marks it as "checked" and silences that log; the
+// error is downgraded to a plain `console.warn' and re-thrown so
+// `dispatchEmacsRequest' can still send the failure payload back to
+// Emacs.  Use for every extension API call that a stale caller-side
+// id can invalidate.
+async function safeTabsCall(fn, what) {
+  try {
+    return await fn();
+  } catch (e) {
+    void api.runtime.lastError;
+    console.warn(`[handlers] ${what}: ${e?.message ?? e}`);
+    throw e;
+  }
+}
 
 // chrome.action.setIcon({path}) fails inside MV3 service workers
 // ("Failed to fetch") regardless of path correctness.  We build ImageData
@@ -137,11 +161,17 @@ const SHAPE_ADAPTERS = {
     if (!payload || typeof payload.id !== "number") {
       throw new Error("focus-tab: payload.id (tab id) required");
     }
-    await api.tabs.update(payload.id, { active: true });
+    await safeTabsCall(
+      () => api.tabs.update(payload.id, { active: true }),
+      `tabs.update(${payload.id})`);
     if (payload.focusWindow) {
-      const tab = await api.tabs.get(payload.id);
+      const tab = await safeTabsCall(
+        () => api.tabs.get(payload.id),
+        `tabs.get(${payload.id})`);
       if (tab.windowId !== undefined) {
-        await api.windows.update(tab.windowId, { focused: true });
+        await safeTabsCall(
+          () => api.windows.update(tab.windowId, { focused: true }),
+          `windows.update(${tab.windowId})`);
       }
     }
     return { status: "ok" };
@@ -152,7 +182,47 @@ const SHAPE_ADAPTERS = {
     if (!payload || typeof payload.id !== "number") {
       throw new Error("tab-id: payload.id required");
     }
-    return await api.tabs.remove(payload.id);
+    return await safeTabsCall(
+      () => api.tabs.remove(payload.id),
+      `tabs.remove(${payload.id})`);
+  },
+
+  // GET_ALL_TABS with an accurate `lastAccessed' for active tabs.
+  //
+  // Neither browser is a reliable source for the active tab: Chrome
+  // never updates `Tab.lastAccessed' between activations, so a tab
+  // active for an hour still reads "an hour ago" even if the user
+  // just switched back to Chrome; Firefox continuously advances it
+  // to wall-clock time whether the browser has OS focus or not.
+  //
+  // The `focus-tracker' module records every window's last confirmed
+  // OS-focused moment via `windows.onFocusChanged'.  At query time
+  // `activeTabTimestamp' returns:
+  //   - `Date.now()' when the tab's window currently has focus
+  //   - the last-focused stamp when the window was focused before
+  //   - the browser's own `lastAccessed' as fallback when we have
+  //     no record (initial load, SW respawn between events)
+  //
+  // Non-active tabs pass through untouched: both browsers report
+  // those correctly.
+  async "tabs-query-mru-safe"(payload) {
+    // Emacs sends nil payload as the JSON-encoded keyword :null,
+    // which arrives here as the string "null" (an Emacs
+    // json-encode quirk).  Any non-object payload — null, "null",
+    // undefined, an array — is treated as "no filter" so tabs.query
+    // sees a plain {} and returns every tab.  A real filter object
+    // is passed through unchanged.
+    const query = (payload
+                   && typeof payload === "object"
+                   && !Array.isArray(payload))
+      ? payload
+      : {};
+    const tabs = await api.tabs.query(query);
+    return tabs.map((tab) => {
+      if (!tab.active) return tab;
+      const ts = activeTabTimestamp(tab.windowId, tab.lastAccessed);
+      return { ...tab, lastAccessed: ts };
+    });
   },
 
   // { code: "..." } -> runtime-specific eval primitive in ./eval-impl.js.

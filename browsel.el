@@ -75,7 +75,7 @@
 (declare-function org-roam-capture-    "ext:org-roam" (&rest args))
 (declare-function org-roam-node-create "ext:org-roam" (&rest args))
 
-(defconst browsel-version "0.92"
+(defconst browsel-version "0.94"
   "Current version of the browsel package.")
 
 ;;;###autoload
@@ -100,6 +100,32 @@ from Lisp the return value is always the version string."
 
 (defvar browsel-host 'local
   "Host the WebSocket server binds to.  `local' = 127.0.0.1.")
+
+(defcustom browsel-clients-file
+  (locate-user-emacs-file "browsel-clients.eld")
+  "File in which browsel remembers instance-UUID → assigned-name mappings.
+
+When two profiles or two installs of the same browser both connect
+without a user-set label, arrival order alone would decide which
+one becomes `chrome' and which one becomes `chrome-<short>' — and
+that order can flip between Emacs sessions, so
+`browsel-default-client' set to `chrome' would silently target a
+different install after a reboot.  This file breaks the tie: the
+name assigned to each `instance' UUID is persisted here and reused
+whenever that install reconnects, regardless of connection order.
+
+A user-set label always wins over the registry — relabeling in
+the extension options page takes effect on the next CLIENT_HELLO
+and the new name is what gets remembered from then on.
+
+Format is one elisp form (an alist of `(INSTANCE . NAME)' pairs)
+written with `pp'.  The file is safe to delete at any time: the
+next hello repopulates it, at the cost of one Emacs session's
+worth of arrival-order naming while the registry rebuilds.  Set
+to nil to disable persistence entirely."
+  :type '(choice (file :tag "File")
+                 (const :tag "Disable persistence" nil))
+  :group 'browsel)
 
 (defvar browsel-org-capture-key nil
   "Org-capture template key used by the ORG_CAPTURE handler.
@@ -189,6 +215,22 @@ NAME is the identifier the client announced via CLIENT_HELLO, or
 \"unknown-N\" until the client identifies itself.  WS is the
 underlying websocket object.")
 
+(defvar browsel--client-instances nil
+  "Alist mapping websocket → instance UUID string.
+Populated by `browsel--handle-client-hello' from the extension's
+`chrome.storage.local' UUID.  Consulted when a new CLIENT_HELLO
+arrives with an INSTANCE already registered on a different ws: the
+stale entry is closed and its slot reused, so a reconnecting profile
+keeps its name instead of accumulating suffixes.")
+
+(defvar browsel--name-registry nil
+  "Alist mapping instance UUID → assigned display name.
+Persisted to `browsel-clients-file' so the same install gets the
+same name across Emacs restarts regardless of connection order.
+Loaded once on `browsel-start' and updated on every CLIENT_HELLO
+that yields a naming decision.  A user-set label always overrides
+whatever is in here for that instance's next hello.")
+
 (defvar browsel--connect-counter 0
   "Monotonic counter for naming unidentified clients.
 Reset on `browsel-start'; never decrements during a server's
@@ -236,6 +278,101 @@ buffer."
     (message "browsel: %s" msg)
     (browsel--log "[WARN] %s" msg)))
 
+;; ── Name-registry persistence ────────────────────────────────────────────────
+;;
+;; The registry maps instance UUID → last-assigned display name.  It
+;; is loaded on `browsel-start' and saved on every hello that touches
+;; it (and once more on `browsel-stop').  The file format is a single
+;; elisp form so the file is diff-friendly and hand-editable in a
+;; pinch; the header comment reminds a future reader why it exists.
+
+(defconst browsel--registry-file-header
+  ";; -*- mode: emacs-lisp; coding: utf-8; -*-\n\
+;; browsel client-name registry — auto-generated, do NOT edit by hand.\n\
+;; Maps per-install `instance' UUIDs to the display names Emacs\n\
+;; assigned them, so the same install keeps its name across\n\
+;; sessions regardless of connection order.  Delete this file to\n\
+;; reset; the next hello will repopulate it.  See\n\
+;; `browsel-clients-file' for the full rationale.\n\n"
+  "Header comment prepended to `browsel-clients-file'.")
+
+(defun browsel--load-name-registry ()
+  "Return the persisted name registry as an alist, or nil.
+Reads `browsel-clients-file'.  Returns nil when the file is
+missing, unreadable, empty, or its contents are not an alist —
+each case is a soft failure that a warning surfaces once; the
+server keeps running with an empty registry."
+  (let ((file browsel-clients-file))
+    (cond
+     ((or (null file) (not (file-exists-p file)))
+      nil)
+     ((not (file-readable-p file))
+      (browsel--warn "clients file %s not readable; using empty registry" file)
+      nil)
+     (t
+      (condition-case err
+          (with-temp-buffer
+            (insert-file-contents file)
+            (let ((form (read (current-buffer))))
+              (if (and (listp form)
+                       (seq-every-p (lambda (c) (and (consp c)
+                                                     (stringp (car c))
+                                                     (stringp (cdr c))))
+                                    form))
+                  form
+                (browsel--warn "clients file %s malformed; using empty registry"
+                               file)
+                nil)))
+        (error
+         (browsel--warn "could not read clients file %s: %s; using empty registry"
+                        file (error-message-string err))
+         nil))))))
+
+(defun browsel--save-name-registry ()
+  "Persist `browsel--name-registry' to `browsel-clients-file' atomically.
+Writes to a sibling `.tmp' file first, then renames — so a crash
+mid-write leaves the previous good file intact.  No-op when
+`browsel-clients-file' is nil (persistence disabled) or when the
+registry is empty and no file exists yet (avoids creating an empty
+file for users who never hit a hello)."
+  (let ((file browsel-clients-file))
+    (when (and file
+               (or browsel--name-registry (file-exists-p file)))
+      (condition-case err
+          (let ((tmp (concat file ".tmp")))
+            (with-temp-file tmp
+              (insert browsel--registry-file-header)
+              (let ((print-level  nil)
+                    (print-length nil))
+                (pp browsel--name-registry (current-buffer))))
+            (rename-file tmp file t))
+        (error
+         (browsel--warn "could not save clients file %s: %s"
+                        file (error-message-string err)))))))
+
+(defun browsel--registry-set (instance name)
+  "Set (INSTANCE . NAME) in the registry and persist.
+Removes any prior binding for INSTANCE before inserting the new
+pair, so the alist stays flat.  Persistence is best-effort — a
+save failure warns but does not abort the hello."
+  (setq browsel--name-registry
+        (cons (cons instance name)
+              (cl-remove-if (lambda (c) (equal (car c) instance))
+                            browsel--name-registry)))
+  (browsel--save-name-registry))
+
+(defun browsel--registry-clear (instance)
+  "Remove INSTANCE from the registry and persist.
+Called from `browsel--handle-client-hello' when a labeled hello
+arrives — the registry only remembers default-case assignments,
+so any prior entry for INSTANCE is stale once the user has
+declared a label.  No-op when INSTANCE is not present."
+  (when (assoc instance browsel--name-registry)
+    (setq browsel--name-registry
+          (cl-remove-if (lambda (c) (equal (car c) instance))
+                        browsel--name-registry))
+    (browsel--save-name-registry)))
+
 ;; ── Server lifecycle ─────────────────────────────────────────────────────────
 
 ;;;###autoload
@@ -246,8 +383,10 @@ buffer."
              (not (eq (process-status browsel--server-process) 'closed)))
     (browsel-stop))
   (setq browsel--clients nil
+        browsel--client-instances nil
         browsel--connect-counter 0
         browsel--pending-callbacks nil
+        browsel--name-registry (browsel--load-name-registry)
         browsel--server-process
         (websocket-server
          browsel-port
@@ -267,7 +406,9 @@ buffer."
     (websocket-server-close browsel--server-process)
     (setq browsel--server-process nil))
   (browsel--cancel-all-pending "server stopped")
+  (browsel--save-name-registry)
   (setq browsel--clients nil
+        browsel--client-instances nil
         browsel--connect-counter 0)
   (browsel--log "[SERVER] stopped")
   (message "Chrome server stopped"))
@@ -285,10 +426,13 @@ replace the placeholder with a stable identifier."
                         name (length browsel--clients))))
 
 (defun browsel--on-close (ws)
-  "Remove disconnected client WS and drop its rx buffer."
+  "Remove disconnected client WS and drop its rx buffer and instance record."
   (let ((cell (rassq ws browsel--clients)))
     (setq browsel--clients
           (cl-remove-if (lambda (c) (eq (cdr c) ws)) browsel--clients)
+          browsel--client-instances
+          (cl-remove-if (lambda (c) (eq (car c) ws))
+                        browsel--client-instances)
           browsel--rx-buffers
           (cl-remove-if (lambda (c) (eq (car c) ws)) browsel--rx-buffers))
     (browsel--log "[DISCONNECT] %s (clients=%d)"
@@ -461,6 +605,164 @@ NAME appears in MSG and is informational only."
   "Return the list of connected client names, in connection order (newest first)."
   (mapcar #'car browsel--clients))
 
+;; ── Public browser API ───────────────────────────────────────────────────────
+;;
+;; `browsel-browsers' and `browsel-browser-tabs' are the stable
+;; entry points other packages should build on.  They speak in the
+;; user-facing "browser" vocabulary, hide the internal alists, and
+;; validate their inputs.  `browsel-connected-clients' remains for
+;; cheap name-only enumeration.
+
+(defun browsel--client-instance-for-ws (ws)
+  "Return the instance UUID recorded for WS, or nil."
+  (cdr (assq ws browsel--client-instances)))
+
+(defun browsel--client-instance-for-name (name)
+  "Return the instance UUID recorded for the browser named NAME, or nil."
+  (browsel--client-instance-for-ws
+   (cdr (assoc name browsel--clients))))
+
+(defun browsel-browsers ()
+  "Return the connected browsers as a list of plists.
+Each plist has:
+  :name      — display name (also returned by `browsel-connected-clients').
+  :instance  — per-install UUID string, stable across reconnects
+               (see `browsel-clients-file').
+Order matches `browsel-connected-clients' (newest connection first).
+Downstream packages should prefer this over
+`browsel-connected-clients' when they need to persist a reference
+to a specific install across sessions."
+  (mapcar (lambda (cell)
+            (list :name     (car cell)
+                  :instance (browsel--client-instance-for-ws (cdr cell))))
+          browsel--clients))
+
+(defun browsel--normalize-browsers (browsers)
+  "Resolve BROWSERS to a validated list of connected browser names.
+BROWSERS is one of: nil (every connected browser), a name string
+\(wrap in a one-element list), or a list of name strings (each
+must be connected).  Signals `user-error' when no browser is
+connected, or when any requested name is not currently connected."
+  (let ((all (browsel-connected-clients)))
+    (cond
+     ((null browsers)
+      (or all (user-error "browsel: no browser connected")))
+     ((stringp browsers)
+      (browsel--normalize-browsers (list browsers)))
+     ((listp browsers)
+      (let ((missing (seq-remove (lambda (b) (member b all)) browsers)))
+        (when missing
+          (user-error
+           "browsel: not connected: %s (connected: %s)"
+           (mapconcat #'identity missing ", ")
+           (if all (mapconcat #'identity all ", ") "none"))))
+      browsers)
+     (t
+      (user-error
+       "browsel: BROWSERS must be nil, a string, or a list of strings; got %S"
+       browsers)))))
+
+(defun browsel-browser-tabs (&optional browsers)
+  "Return open tabs from the connected browsers.
+BROWSERS narrows the query:
+  - nil          — every entry in `browsel-connected-clients'.
+  - name string  — that single browser only.
+  - list of strings — every browser in the list.
+
+Each returned element is the extension's raw tab plist extended
+with two browsel-specific keys:
+  :browsel-browser  — the browser name that owns the tab (same
+                      shape as `browsel-connected-clients' entries
+                      and safe to pass to `browsel-request').
+  :browsel-instance — the browser's per-install UUID, stable
+                      across reconnects.
+Signals `user-error' when no browser is connected, or when any
+requested name is not connected.
+
+Requests are issued sequentially — parallel would need
+`browsel-request-async' callback juggling and tab enumeration is
+fast enough that the extra complexity is not worth it for the two
+or three browsers this package is designed for.  A failing
+browser is logged via `message' and its tabs are omitted; the
+caller sees an empty list only when every queried browser failed."
+  (let ((selected (browsel--normalize-browsers browsers)))
+    (apply #'append
+           (mapcar
+            (lambda (name)
+              (let ((instance (browsel--client-instance-for-name name)))
+                (condition-case err
+                    (mapcar (lambda (tab)
+                              (append tab
+                                      (list :browsel-browser  name
+                                            :browsel-instance instance)))
+                            (browsel-request "GET_ALL_TABS" nil name))
+                  (error
+                   (message "browsel: %s failed: %s"
+                            name (error-message-string err))
+                   nil))))
+            selected))))
+
+(defun browsel-focus-tab (tab &optional focus-window)
+  "Focus TAB in the browser that owns it.
+TAB is a plist as returned by `browsel-browser-tabs' — it must
+carry both `:id' (the browser's numeric tab id) and
+`:browsel-browser' (the owning browser's name).  FOCUS-WINDOW
+non-nil also raises the browser's OS window so the tab becomes
+visually foreground, and on macOS nudges the browser app itself
+via `browsel-activate-client' for browsers listed in
+`browsel-clients-needing-activation'.
+
+Signals `user-error' when TAB lacks either required key, or when
+its owning browser is not currently connected.  Returns nil."
+  (let ((id      (plist-get tab :id))
+        (browser (plist-get tab :browsel-browser)))
+    (unless (numberp id)
+      (user-error "browsel-focus-tab: TAB has no numeric :id"))
+    (unless (and (stringp browser) (not (string-empty-p browser)))
+      (user-error "browsel-focus-tab: TAB has no :browsel-browser"))
+    (unless (member browser (browsel-connected-clients))
+      (user-error
+       "browsel-focus-tab: browser %S is not connected (connected: %s)"
+       browser
+       (let ((all (browsel-connected-clients)))
+         (if all (mapconcat #'identity all ", ") "none"))))
+    (browsel-request "FOCUS_TAB"
+                     (if focus-window
+                         `(:id ,id :focusWindow t)
+                       `(:id ,id))
+                     browser)
+    (when focus-window
+      (browsel-activate-client browser))
+    nil))
+
+(defun browsel-close-tab (tab)
+  "Close TAB in the browser that owns it.
+TAB is a plist as returned by `browsel-browser-tabs' — it must
+carry both `:id' (the browser's numeric tab id) and
+`:browsel-browser' (the owning browser's name).
+
+Signals `user-error' when TAB lacks either required key, or when
+its owning browser is not currently connected.  Returns nil.
+
+Note: `chrome.tabs.remove' bypasses any in-page `beforeunload'
+prompt — those only fire from user-initiated UI closes — so
+pages with unsaved form state close without a dialog.  Firefox
+behaves the same way."
+  (let ((id      (plist-get tab :id))
+        (browser (plist-get tab :browsel-browser)))
+    (unless (numberp id)
+      (user-error "browsel-close-tab: TAB has no numeric :id"))
+    (unless (and (stringp browser) (not (string-empty-p browser)))
+      (user-error "browsel-close-tab: TAB has no :browsel-browser"))
+    (unless (member browser (browsel-connected-clients))
+      (user-error
+       "browsel-close-tab: browser %S is not connected (connected: %s)"
+       browser
+       (let ((all (browsel-connected-clients)))
+         (if all (mapconcat #'identity all ", ") "none"))))
+    (browsel-request "CLOSE_TAB" `(:id ,id) browser)
+    nil))
+
 (defun browsel--broadcast (data &optional client)
   "JSON-encode DATA and send it to one connected client.
 With CLIENT nil and exactly one client connected, that client is the
@@ -498,22 +800,66 @@ response payload.  Re-registering overwrites the previous binding."
 
 ;; ── Built-in CLIENT_HELLO handler ────────────────────────────────────────────
 
-(defun browsel--unique-client-name (requested ws &optional n)
-  "Return REQUESTED, possibly with a -N suffix, unused by any other ws.
-WS is permitted to already own the requested name (idempotent reuse).
-Optional N is an internal recursion counter; callers should omit it."
-  (let* ((n         (or n 1))
-         (candidate (if (= n 1) requested (format "%s-%d" requested n)))
-         (cell      (assoc candidate browsel--clients)))
-    (if (or (not cell) (eq (cdr cell) ws))
-        candidate
-      (browsel--unique-client-name requested ws (1+ n)))))
+(defconst browsel--instance-suffix-length 6
+  "Number of hex characters from INSTANCE to append on a label collision.
+6 leaves ~1 in 16M for a same-label-different-instance collision — well
+below the point at which two profiles on one machine would notice.")
+
+(defun browsel--resolve-client-name (label instance ws)
+  "Return a display name for WS given LABEL and INSTANCE (both non-empty strings).
+Returns LABEL when no other ws is registered under it.  On collision,
+returns `LABEL-SHORT' where SHORT is the first
+`browsel--instance-suffix-length' hex characters of INSTANCE.  In the
+astronomically-unlikely event that suffix collides too, falls back to
+the full `LABEL-INSTANCE'.  WS is permitted to already own LABEL
+\(idempotent reuse — a hello arriving for the same ws that is already
+mapped)."
+  (let ((cell (assoc label browsel--clients)))
+    (if (or (null cell) (eq (cdr cell) ws))
+        label
+      (let* ((short   (substring instance 0 browsel--instance-suffix-length))
+             (name    (concat label "-" short))
+             (again   (assoc name browsel--clients)))
+        (if (or (null again) (eq (cdr again) ws))
+            name
+          (concat label "-" instance))))))
+
+(defun browsel--close-stale-instance-ws (instance new-ws)
+  "If INSTANCE is already registered on a ws other than NEW-WS, drop it.
+The stale ws is unregistered from every state table and closed.  This
+is what makes a reconnecting extension reuse its previous slot instead
+of accumulating suffixes — the same INSTANCE arrives on a new ws while
+the old ws has not yet been noticed as dead."
+  (let ((cell (rassoc instance browsel--client-instances)))
+    (when (and cell (not (eq (car cell) new-ws)))
+      (let* ((stale-ws  (car cell))
+             (name-cell (rassq stale-ws browsel--clients)))
+        (browsel--log "[HELLO] instance %s already on stale ws (%s); \
+closing and reusing slot"
+                            (substring instance 0 browsel--instance-suffix-length)
+                            (if name-cell (car name-cell) "?"))
+        (setq browsel--clients
+              (cl-remove-if (lambda (c) (eq (cdr c) stale-ws))
+                            browsel--clients)
+              browsel--client-instances
+              (cl-remove-if (lambda (c) (eq (car c) stale-ws))
+                            browsel--client-instances)
+              browsel--rx-buffers
+              (cl-remove-if (lambda (c) (eq (car c) stale-ws))
+                            browsel--rx-buffers))
+        (ignore-errors (websocket-close stale-ws))))))
 
 (defun browsel--handle-client-hello (payload)
   "Built-in CLIENT_HELLO handler.
-Renames the entry for the websocket currently being dispatched to
-the client name announced in PAYLOAD, with a -N suffix appended if
-the name is already taken by a different websocket.
+Renames the entry for the websocket currently being dispatched using
+the LABEL and INSTANCE announced in PAYLOAD.  LABEL is the display
+name (user-configurable, defaults to the build's kind).  INSTANCE is
+a per-install UUID from the extension's `chrome.storage.local'; it is
+stable across reconnects, so a hello arriving with an INSTANCE that
+is already registered on a different ws replaces the stale entry
+instead of appending a suffix.  On label collision between two
+distinct instances, `LABEL-SHORT' is used (see
+`browsel--resolve-client-name').
 
 The PAYLOAD must include a `:version' string that exactly matches
 `browsel-version'.  The version check is strict: any mismatch
@@ -521,13 +867,20 @@ The PAYLOAD must include a `:version' string that exactly matches
 error payload, leaves the client unregistered (its placeholder
 \"unknown-N\" name persists), and the extension's ws-client treats
 the connection as incompatible and stops the reconnect loop."
-  (let ((ws       browsel--current-ws)
-        (requested (plist-get payload :client))
+  (let ((ws        browsel--current-ws)
+        (client    (plist-get payload :client))
+        (raw-label (plist-get payload :label))
+        (instance  (plist-get payload :instance))
         (version   (plist-get payload :version)))
     (unless ws
       (error "CLIENT_HELLO invoked outside a request dispatch"))
-    (unless (and (stringp requested) (not (string-empty-p requested)))
+    (unless (and (stringp client) (not (string-empty-p client)))
       (error "CLIENT_HELLO requires payload.client (non-empty string)"))
+    (unless (and (stringp instance)
+                 (>= (length instance) browsel--instance-suffix-length))
+      (error "CLIENT_HELLO requires payload.instance \
+\(string with at least %d chars); got: %S"
+             browsel--instance-suffix-length instance))
     (unless (and (stringp version) (not (string-empty-p version)))
       (error "CLIENT_HELLO requires payload.version (non-empty string); \
 emacs=%s, extension sent: %S" browsel-version version))
@@ -535,15 +888,64 @@ emacs=%s, extension sent: %S" browsel-version version))
       (error "version mismatch: emacs=%s extension=%s; \
 rebuild and reload both sides"
              browsel-version version))
-    (let* ((final-name (browsel--unique-client-name requested ws))
-           (others     (cl-remove-if (lambda (c) (eq (cdr c) ws))
-                                     browsel--clients)))
-      (setq browsel--clients
-            (cons (cons final-name ws) others))
-      (browsel--log "[HELLO] %s (clients=%d)"
-                          final-name (length browsel--clients))
-      `((status . "ok")
-        (client . ,final-name)))))
+    ;; `label-set' means the user actually configured a label in the
+    ;; extension options page.  The extension omits the `:label'
+    ;; field entirely when unset, so field presence — not equality
+    ;; to the client kind — is the honest signal.  Old logic that
+    ;; checked (not (string= label client)) could not tell a user
+    ;; who deliberately labeled their install \"chrome\" from a user
+    ;; who had no label at all, and would re-apply a stale registry
+    ;; entry on the second case.
+    (let* ((label-set (and (stringp raw-label) (not (string-empty-p raw-label))))
+           (label     (if label-set raw-label client)))
+      (browsel--close-stale-instance-ws instance ws)
+      (let* ((final-name (browsel--resolve-hello-name
+                          label label-set instance ws))
+             (others     (cl-remove-if (lambda (c) (eq (cdr c) ws))
+                                       browsel--clients))
+             (other-ins  (cl-remove-if (lambda (c) (eq (car c) ws))
+                                       browsel--client-instances)))
+        (setq browsel--clients
+              (cons (cons final-name ws) others)
+              browsel--client-instances
+              (cons (cons ws instance) other-ins))
+        ;; Registry policy: the registry exists to stabilise default
+        ;; naming across sessions.  When the user sets a label the
+        ;; default case is irrelevant, so any prior registry entry
+        ;; for this instance is stale and gets cleared — that way a
+        ;; later label-clear reverts to a fresh default assignment
+        ;; instead of resurrecting the label as if it were the
+        ;; default.  When the label is unset we record whatever we
+        ;; assigned so the same install keeps that name next
+        ;; session.
+        (if label-set
+            (browsel--registry-clear instance)
+          (browsel--registry-set instance final-name))
+        (browsel--log "[HELLO] %s instance=%s (clients=%d)"
+                            final-name
+                            (substring instance 0
+                                       browsel--instance-suffix-length)
+                            (length browsel--clients))
+        `((status . "ok")
+          (client . ,final-name))))))
+
+(defun browsel--resolve-hello-name (label label-set instance ws)
+  "Return the display name for a hello with LABEL and INSTANCE on WS.
+LABEL-SET non-nil means the user configured a custom label — the
+registry is ignored and `browsel--resolve-client-name' picks fresh
+so a relabel in the options page takes effect immediately.  Nil
+means the label is the default (equal to the client kind); consult
+`browsel--name-registry' for a remembered name, falling back to
+fresh resolution when the remembered name is currently held by
+another live ws."
+  (or (and (not label-set)
+           (let* ((remembered (cdr (assoc instance browsel--name-registry)))
+                  (cell       (and remembered
+                                   (assoc remembered browsel--clients))))
+             (and remembered
+                  (or (null cell) (eq (cdr cell) ws))
+                  remembered)))
+      (browsel--resolve-client-name label instance ws)))
 
 (browsel-register-handler "CLIENT_HELLO"
                                 #'browsel--handle-client-hello)

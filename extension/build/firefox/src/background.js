@@ -30,9 +30,16 @@ import {
   dispatchIncomingEmacsRequest,
 } from "./core.js";
 import { startWebSocketClient } from "./ws-client.js";
+import { readOrCreateIdentity } from "./identity.js";
+import { initFocusTracking } from "./focus-tracker.js";
 
+initFocusTracking();
+
+const identity = await readOrCreateIdentity(browser);
 const client = startWebSocketClient({
   clientName: "firefox",
+  instance:   identity.instance,
+  label:      identity.label,
   version:    browser.runtime.getManifest().version,
   onStatus:   setWsStatus,
   onIncompatible: (message) => {

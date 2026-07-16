@@ -104,15 +104,25 @@ async function extractMainHtml(tabId) {
 }
 
 // Invoke METHOD in a tab's content script and resolve with its
-// `reply.payload`.  This is the generic bridge used by tab-message payloads.
+// `reply.payload'.  This is the generic bridge used by tab-message
+// payloads.  The "Receiving end does not exist" error deserves its
+// own message: it almost always means the tab was open before the
+// extension was last (re)loaded, so no content script was ever
+// injected into it — reloading the tab fixes it.  The raw browser
+// wording is technically correct but obscure.
 function callTabMethod(tabId, method, extra) {
   return new Promise((resolve, reject) => {
     const message = { method, ...(extra ?? {}) };
     api.tabs.sendMessage(tabId, message, (reply) => {
       if (api.runtime.lastError) {
+        const raw = api.runtime.lastError.message || "";
+        const noReceiver = raw.includes("Could not establish connection")
+                        || raw.includes("Receiving end does not exist");
         reject(new Error(
-          `tab-message '${method}': ${api.runtime.lastError.message} ` +
-          `(content script not loaded for this URL?)`
+          noReceiver
+            ? `tab-message '${method}': content script not loaded — ` +
+              `reload the tab (Cmd-R / Ctrl-R) and try again`
+            : `tab-message '${method}': ${raw}`
         ));
         return;
       }

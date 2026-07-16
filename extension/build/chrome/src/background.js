@@ -27,6 +27,10 @@ import {
   setWsStatus,
   dispatchIncomingEmacsRequest,
 } from "./core.js";
+import { readOrCreateIdentity } from "./identity.js";
+import { initFocusTracking } from "./focus-tracker.js";
+
+initFocusTracking();
 
 const OFFSCREEN_URL = "html/offscreen.html";
 
@@ -151,6 +155,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       // travels in CLIENT_HELLO is the same one the manifest carries.
       sendResponse({ version: chrome.runtime.getManifest().version });
       return false;
+    }
+
+    case "GET_IDENTITY": {
+      // Route through the SW so the UUID is created exactly once even
+      // if offscreen races with the SW's own boot.  Async response
+      // requires `return true` to keep the message channel open.
+      readOrCreateIdentity(chrome).then(
+        (identity) => sendResponse(identity),
+        (e) => {
+          log("readOrCreateIdentity failed:", e);
+          sendResponse({ error: e?.message ?? String(e) });
+        },
+      );
+      return true;
     }
 
     default:
