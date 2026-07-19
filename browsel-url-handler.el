@@ -70,6 +70,14 @@
 ;; is off the extension cannot enumerate or create incognito windows;
 ;; `browsel-browse-url' detects the failure, warns, and falls back to
 ;; a normal (non-incognito) tab so the user still reaches the page.
+;;
+;; URL preprocessing: `browsel-browse-url-preprocess-functions' is an
+;; abnormal hook of URL-rewriting functions run before routing.  Each
+;; function receives a URL string and returns a (possibly rewritten)
+;; URL string; functions apply in list order and the output of one
+;; feeds the next.  The rewritten URL is what routing, tab matching,
+;; and the browser dispatch all see.  Intended for lossless rewrites
+;; — un-wrapping tracker links, canonicalizing amp-URLs, and the like.
 
 ;;; Code:
 
@@ -126,6 +134,21 @@ Each element is a plist with these keys:
 URLs that match no entry fall through to `browsel-default-client',
 non-incognito, with identical-URL match."
   :type '(repeat plist)
+  :group 'browsel)
+
+(defcustom browsel-browse-url-preprocess-functions nil
+  "Abnormal hook of URL-rewriting functions run before routing.
+Each function receives a URL string and must return a URL string.
+Functions are applied in list order and the output of one is fed
+into the next.  The rewritten URL is what `browsel-browse-url'
+matches against `browsel-url-routes' and passes to the browser (or
+eww).
+
+Intended for lossless URL rewriting — un-wrapping tracker links,
+canonicalizing amp-URLs, and the like.  Functions must be pure
+\(URL string in, URL string out) and must return the input
+unchanged when they do not apply."
+  :type 'hook
   :group 'browsel)
 
 ;; ── Matching helpers ───────────────────────────────────────────────────────
@@ -229,6 +252,11 @@ foreground the same way the focus-existing-tab path does."
 (defun browsel-browse-url (url &rest _ignored)
   "Open URL in a browser via browsel, honoring `browsel-url-routes'.
 
+URL is first passed through
+`browsel-browse-url-preprocess-functions' (an abnormal hook of
+URL-rewriting functions applied in order); the rewritten URL is
+what routing, tab matching, and the browser dispatch all see.
+
 Two separate concerns:
 
   (a) ROUTING — which client to send the URL to.  The first route
@@ -259,7 +287,10 @@ window otherwise.
 Compatible with `browse-url-browser-function'; extra arguments are
 accepted and ignored."
   (interactive (list (read-string "URL: ")))
-  (let* ((route     (browsel-url-handler--match-route url))
+  (let* ((url       (seq-reduce (lambda (u fn) (funcall fn u))
+                                browsel-browse-url-preprocess-functions
+                                url))
+         (route     (browsel-url-handler--match-route url))
          ;; No route, no `browsel-default-client': pick a client now
          ;; rather than erroring out.  `browsel--read-client-interactive'
          ;; returns the sole connected client when there is only one,
