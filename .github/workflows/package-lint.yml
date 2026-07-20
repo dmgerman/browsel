@@ -20,10 +20,8 @@ jobs:
       fail-fast: false
       matrix:
         emacs_version:
-          - '27.2'  # Package-Requires floor
-          - '28.2'
-          - '29.4'
-          - 'snapshot'
+          - '30'
+          - '31'
     steps:
       - uses: actions/checkout@v4
 
