@@ -15,6 +15,7 @@ const logoEl      = document.getElementById("logo");
 const identityNameEl     = document.getElementById("identity-name");
 const identityNameHintEl = document.getElementById("identity-name-hint");
 const identityUuidEl     = document.getElementById("identity-uuid");
+const swErrorEl          = document.getElementById("sw-error");
 
 const LOGO_DEFAULT = "../icons/icon128.png";
 const LOGO_RED     = "../icons/icon-red-128.png";
@@ -346,9 +347,20 @@ async function renderIdentity() {
   identityNameHintEl.textContent = isLabelSet
     ? ""
     : "(default — set a label to run multiple)";
-  identityUuidEl.textContent = instance
-    || "(not yet generated — reconnect the extension once)";
+  identityUuidEl.textContent = instance || IDENTITY_MISSING_MESSAGE;
 }
+
+// The UUID lands in storage the first time the background page (Firefox)
+// or offscreen document (Chrome) runs `readOrCreateIdentity'.  If the
+// popup opens and it isn't there, the extension's own lifecycle didn't
+// complete — the WS-reconnect button in this popup can't fix it, so the
+// message points at the extension page, not the reconnect action.  The
+// service-worker check below is the authoritative signal for the
+// "extension truly not running" case; this message is a safe fallback
+// for the slower "storage write is still pending" window.
+const IDENTITY_MISSING_MESSAGE = IS_FIREFOX
+  ? "(not yet generated — reload the extension in about:debugging)"
+  : "(not yet generated — reload the extension in chrome://extensions)";
 
 // ── Live status updates from the service worker ─────────────────────────────
 
@@ -358,9 +370,54 @@ api.runtime.onMessage.addListener((msg) => {
   return false;
 });
 
-// On open, query the current status.
+// ── Service-worker / background-page health check ──────────────────────────
+//
+// The popup opens even when the extension's own background script (SW
+// on Chrome, background.js on Firefox) failed to load — the popup is a
+// standalone HTML page.  When that happens, every `sendToBackground'
+// call fails with "Could not establish connection" / "Receiving end
+// does not exist" because nothing is listening for the message.
+//
+// Users who don't know to open the extension page and click "Errors"
+// will see the popup's stale-looking status and give up.  Surface the
+// real state with a red banner naming the exact remedial step.
+
+function isSwNotRunning(response) {
+  const msg = response?.error;
+  return typeof msg === "string" && (
+    msg.includes("Could not establish connection")
+    || msg.includes("Receiving end does not exist")
+  );
+}
+
+function showSwFailed() {
+  const page = IS_FIREFOX
+    ? "about:debugging#/runtime/this-firefox"
+    : "chrome://extensions";
+  const errorsHint = IS_FIREFOX
+    ? "click <em>Inspect</em> on the Browsel card and read the console"
+    : "click the <em>Errors</em> button on the Browsel card";
+  swErrorEl.innerHTML = `
+    <strong>Extension background script isn't running.</strong><br>
+    Open <code>${page}</code>, ${errorsHint} for the exact reason,
+    then reload the extension.  The <em>Reconnect</em> button below
+    only touches the WebSocket — it cannot restart a failed load.
+  `;
+  swErrorEl.style.display = "block";
+  dot.className        = "dot incompatible";
+  statusText.textContent = "Extension not loaded";
+}
+
+// On open, query the current status.  Route the "SW not running" case
+// into the banner rather than the silent DISCONNECTED fallback.
 sendToBackground({ target: "service-worker", type: "WS_STATUS_QUERY" })
-  .then((r) => setStatus(r?.status ?? "DISCONNECTED"));
+  .then((r) => {
+    if (isSwNotRunning(r)) {
+      showSwFailed();
+    } else {
+      setStatus(r?.status ?? "DISCONNECTED");
+    }
+  });
 
 renderActions().then(applyShortcutHints);
 renderConsent();

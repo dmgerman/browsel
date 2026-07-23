@@ -122,6 +122,25 @@
       border-radius: 3px; cursor: pointer; flex-shrink: 0;
     }
     .ctab button.revoke:hover { background: #fcc; }
+    .sw-error {
+      display: none;
+      background: #fee;
+      color: #722;
+      border: 1px solid #f99;
+      border-radius: 4px;
+      padding: 8px 10px;
+      font-size: 12px;
+      margin-bottom: 12px;
+      line-height: 1.4;
+    }
+    .sw-error strong { color: #c33; }
+    .sw-error code {
+      background: rgba(0,0,0,0.05);
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 11px;
+    }
     .identity {
       display: grid;
       grid-template-columns: max-content 1fr;
@@ -176,6 +195,8 @@
     <div id="dot" class="dot disconnected"></div>
     <div id="status-text" class="status-text">Disconnected</div>
   </div>
+
+  <div id="sw-error" class="sw-error"></div>
 
   <div id="identity" class="identity">
     <span class="label">name</span>

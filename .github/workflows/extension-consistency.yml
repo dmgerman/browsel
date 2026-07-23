@@ -1,0 +1,99 @@
+name: extension-consistency
+
+# Users install browsel by cloning the repo and pointing Chrome/Firefox
+# at extension/build/<target>/ directly — they do not run `make`.  That
+# means the tracked build tree must be self-contained: every ES-module
+# import a build .js makes must resolve to another tracked file in the
+# same directory.
+#
+# Without this check, a commit can ship background.js referencing a new
+# helper module whose file was created locally but never `git add`ed.
+# On the committer's machine the build works (the untracked file is
+# there); on a fresh clone the extension fails to register the service
+# worker with a cryptic "Status code: 3" and the popup has no way to
+# tell the user what actually broke.  See issue #1 for the incident
+# that prompted this workflow.
+
+on:
+  push:
+    paths:
+      - 'extension/**'
+      - '.github/workflows/extension-consistency.yml'
+  pull_request:
+    paths:
+      - 'extension/**'
+      - '.github/workflows/extension-consistency.yml'
+
+jobs:
+  imports:
+    name: Verify committed build imports resolve to tracked files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Walk every tracked build .js and verify its imports
+        run: |
+          set -eu
+          fail=0
+          # Every .js file tracked under any extension/build/*/src/
+          # tree.  If the tree ever grows more directories the glob
+          # keeps working.
+          while IFS= read -r f; do
+            dir="$(dirname "$f")"
+            # Extract each `from "./X.js"` import.  Strict on the
+            # leading "./" so we only ever check same-directory
+            # sibling imports — the only shape the extension uses.
+            imports="$(grep -oE 'from[[:space:]]*"\./[^"]+\.js"' "$f" \
+                        | sed -E 's/.*"\.\/([^"]+)"/\1/' || true)"
+            [ -z "$imports" ] && continue
+            while IFS= read -r imp; do
+              target="$dir/$imp"
+              if ! git ls-files --error-unmatch "$target" >/dev/null 2>&1; then
+                # GitHub annotation: shows in the PR diff view.
+                echo "::error file=$f::imports \"./$imp\" but $target is not tracked in git"
+                fail=1
+              fi
+            done <<< "$imports"
+          done < <(git ls-files 'extension/build/*/src/*.js')
+
+          if [ "$fail" -ne 0 ]; then
+            echo ""
+            echo "One or more committed build files reference sibling"
+            echo "modules that are not tracked.  A fresh clone of this"
+            echo "commit ships a broken extension.  Either 'git add' the"
+            echo "missing sibling files (both under extension/src/ and"
+            echo "the built copy under extension/build/<target>/src/)"
+            echo "or revert the import."
+            exit 1
+          fi
+          echo "All committed build imports resolve to tracked files."
+
+      - name: Verify committed build sources match extension/src originals
+        # A weaker consistency invariant: for every file in
+        # extension/src/, the same file must exist and be byte-identical
+        # under every extension/build/<target>/src/.  Catches "committed
+        # a source change without rebuilding" — the second half of the
+        # same incident class.
+        run: |
+          set -eu
+          fail=0
+          for src in extension/src/*.js; do
+            [ -f "$src" ] || continue
+            name="$(basename "$src")"
+            for target_src in extension/build/*/src; do
+              built="$target_src/$name"
+              if [ ! -f "$built" ]; then
+                echo "::error file=$src::not present in $target_src (rebuild the extension and commit the build tree)"
+                fail=1
+                continue
+              fi
+              if ! cmp -s "$src" "$built"; then
+                echo "::error file=$src::differs from $built (rebuild the extension and commit the build tree)"
+                fail=1
+              fi
+            done
+          done
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+          echo "All extension/src/ files match their committed build copies."
