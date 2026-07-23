@@ -523,6 +523,57 @@ toggle the extension cannot enumerate or create incognito windows;
 =browsel-browse-url= detects the failure, warns, and falls back to a
 normal tab so the URL still reaches the user.
 
+*** Rewrite URLs before dispatch
+
+=browsel-browse-url-preprocess-functions= is an abnormal hook of
+URL-rewriting functions run before routing.  Each function receives
+a URL string and returns a URL string; functions apply in list order
+and the output of one is fed into the next.  Routing, tab matching,
+and the browser dispatch all see the rewritten URL, so a preprocess
+function that strips a tracker wrapper will also cause an existing
+tab on the unwrapped URL to be reused.
+
+Intended for lossless URL rewriting — un-wrapping tracker links,
+canonicalizing amp-URLs, stripping known-safe tracking parameters,
+and the like.  Functions must be pure (URL string in, URL string
+out) and must return the input unchanged when they do not apply.
+
+Example: un-mangle Microsoft Exchange "Safe Links" wrappers so
+=browsel= opens the real destination rather than the scanner URL.
+The wrapper preserves the original URL verbatim, percent-encoded,
+inside its =url= query parameter, so the decode is lossless:
+
+#+begin_src emacs-lisp
+(require 'url-parse)
+(require 'url-util)
+
+(defun my/unmangle-safelinks (url)
+  "Un-wrap Microsoft SafeLinks URLs; return URL unchanged otherwise."
+  (let ((host (ignore-errors
+                (url-host (url-generic-parse-url url)))))
+    (if (and (stringp host)
+             (string-suffix-p ".safelinks.protection.outlook.com" host))
+        (let* ((filename (url-filename (url-generic-parse-url url)))
+               (query    (and (string-match "\\?\\(.*\\)\\'" filename)
+                              (match-string 1 filename)))
+               ;; HTML-escaped mail bodies write `&amp;' for `&';
+               ;; un-escape before splitting on `&' or the `url'
+               ;; value truncates at the first `&amp;'.
+               (query    (and query
+                              (replace-regexp-in-string
+                               "&amp;" "&" query t t)))
+               (params   (and query (url-parse-query-string query)))
+               (wrapped  (cadr (assoc "url" (or params '())))))
+          (or wrapped url))
+      url)))
+
+(add-hook 'browsel-browse-url-preprocess-functions
+          #'my/unmangle-safelinks)
+#+end_src
+
+A URL forwarded through two tenants can be wrapped twice; iterate
+the decode (with a small cap) if that matters in your mail flow.
+
 ** Jump to a tab
 
 =M-x browsel-tab-manager= lists every open tab and
@@ -870,6 +921,7 @@ Configuration variables for paths, output locations, and credentials
 | =browsel-org-capture-key=         | org-capture template key for browser captures |
 | =browsel-default-client=          | default browser client for every browsel command |
 | =browsel-url-routes=              | per-pattern URL routing for =browsel-browse-url= |
+| =browsel-browse-url-preprocess-functions= | abnormal hook of URL-rewriting functions run before routing |
 | =browsel-clients-needing-activation= | client names whose macOS app needs an explicit foreground nudge after focus (default =("firefox")=) |
 | =browsel-client-app-names=        | fallback macOS application names per client when the PID-based activation can't find the process |
 | =browsel-tab-manager-sort=        | initial sort for jump-to-tab (default =mru=, cycle with =C-t=) |
