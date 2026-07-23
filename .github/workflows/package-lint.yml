@@ -20,8 +20,10 @@ jobs:
       fail-fast: false
       matrix:
         emacs_version:
-          - '30'
-          - '31'
+          - '30.2'
+        include:
+          - emacs_version: 'snapshot'
+            allow-failure: true
     steps:
       - uses: actions/checkout@v4
 
@@ -32,9 +34,12 @@ jobs:
 
       - name: Run package-lint via make
         run: make lint
+        continue-on-error: ${{ matrix.allow-failure == true }}
 
       - name: Run checkdoc via make
         run: make checkdoc
+        continue-on-error: ${{ matrix.allow-failure == true }}
 
       - name: Run check-declare via make
         run: make check-declare
+        continue-on-error: ${{ matrix.allow-failure == true }}
