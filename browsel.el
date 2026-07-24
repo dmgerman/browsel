@@ -646,14 +646,14 @@ connected, or when any requested name is not currently connected."
   (let ((all (browsel-connected-clients)))
     (cond
      ((null browsers)
-      (or all (user-error "browsel: no browser connected")))
+      (or all (user-error "Browsel: no browser connected")))
      ((stringp browsers)
       (browsel--normalize-browsers (list browsers)))
      ((listp browsers)
       (let ((missing (seq-remove (lambda (b) (member b all)) browsers)))
         (when missing
           (user-error
-           "browsel: not connected: %s (connected: %s)"
+           "Browsel: not connected: %s (connected: %s)"
            (mapconcat #'identity missing ", ")
            (if all (mapconcat #'identity all ", ") "none"))))
       browsers)
@@ -722,7 +722,7 @@ its owning browser is not currently connected.  Returns nil."
       (user-error "browsel-focus-tab: TAB has no :browsel-browser"))
     (unless (member browser (browsel-connected-clients))
       (user-error
-       "browsel-focus-tab: browser %S is not connected (connected: %s)"
+       "Browsel-focus-tab: browser %S is not connected (connected: %s)"
        browser
        (let ((all (browsel-connected-clients)))
          (if all (mapconcat #'identity all ", ") "none"))))
@@ -756,7 +756,7 @@ behaves the same way."
       (user-error "browsel-close-tab: TAB has no :browsel-browser"))
     (unless (member browser (browsel-connected-clients))
       (user-error
-       "browsel-close-tab: browser %S is not connected (connected: %s)"
+       "Browsel-close-tab: browser %S is not connected (connected: %s)"
        browser
        (let ((all (browsel-connected-clients)))
          (if all (mapconcat #'identity all ", ") "none"))))
