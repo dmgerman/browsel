@@ -29,7 +29,7 @@ jobs:
     name: Verify committed build imports resolve to tracked files
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Walk every tracked build .js and verify its imports
         run: |

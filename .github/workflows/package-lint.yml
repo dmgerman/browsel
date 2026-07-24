@@ -25,7 +25,7 @@ jobs:
           - emacs_version: 'snapshot'
             allow-failure: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Emacs
         uses: purcell/setup-emacs@master
