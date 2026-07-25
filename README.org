@@ -145,8 +145,10 @@ does not, click *Reconnect*.
 
 ** In Emacs
 
-- =M-x browsel-tab-manager= — select open tab
-  (ordered in most-recently-used first).
+- =M-x browsel-tab-jump= — completing-read jumper: pick a tab by
+  filter, focus it (ordered most-recently-used first by default).
+- =M-x browsel-tab-manager= — persistent buffer view: dired-style
+  marking, bookmark, filter, sort, refresh.
 - =M-x browsel-org-link= — insert an Org link to the active
   browser tab at point.
 - =M-x browsel-selection= — insert the current text selection
@@ -574,19 +576,26 @@ inside its =url= query parameter, so the decode is lossless:
 A URL forwarded through two tenants can be wrapped twice; iterate
 the decode (with a small cap) if that matters in your mail flow.
 
-** Jump to a tab
+** Tab management
 
-=M-x browsel-tab-manager= lists every open tab and
-focuses the pick.  Each row shows three columns: a flag prefix
-(=a=ctive, =s=ound, =i=ncognito; space when unset), the URL host,
-and the page title — each carries its own face so they read as
-distinct columns.
+Two entry points, same underlying tab list.  Both aggregate tabs
+from every connected browser and route actions back to the owning
+browser.  =browsel-default-client= is intentionally ignored;
+narrow with a prefix argument or a keystroke instead.
+
+*** =browsel-tab-jump= — completing-read jumper
+
+Reads a tab via the minibuffer.  Each candidate renders as
+=[CLIENT ][flags] DOMAIN  TITLE= — the client column appears
+only when two or more browsers are connected.  The =flags= column
+is three characters (=a=ctive, =s=ound audible, =i=ncognito;
+space when unset), each with its own face.
 
 #+begin_example
-[a  ] mail.google.com                 Inbox (28) - xyz@gmail.com
-[ s ] www.youtube.com                 2026 F1 Barcelona GP race analysis
-[  i] duckduckgo.com                  Search results
-[   ] github.com                      GitHub - dmgerman/browsel
+chrome     [a  ] mail.google.com                 Inbox (28) - xyz@gmail.com
+firefox    [ s ] www.youtube.com                 2026 F1 Barcelona GP race analysis
+chrome     [  i] duckduckgo.com                  Search results
+firefox    [   ] github.com                      GitHub - dmgerman/browsel
 #+end_example
 
 In-prompt action keys:
@@ -594,30 +603,89 @@ In-prompt action keys:
 | Key     | Action                                                                   |
 |---------+--------------------------------------------------------------------------|
 | =?=     | help buffer with the legend and the bindings below                       |
-| =RET=   | focus the highlighted candidate's tab and window, then exit              |
-| =M-RET= | show the highlighted tab in its browser window; stay in the prompt, Emacs keeps focus |
-| =M-k=   | close the highlighted candidate's tab (see =browsel-tab-manager-confirm-close=) |
-| =C-c c= | copy the highlighted candidate's URL to the kill ring, stay in the prompt|
-| =C-t=   | cycle the sort order: =mru= → =title= → =domain= → =window=              |
+| =RET=   | focus the highlighted tab and window, exit                               |
+| =M-RET= | show the highlighted tab in its browser window without raising it        |
+| =M-k=   | close the highlighted tab (see =browsel-tab-manager-confirm-close=)      |
+| =C-c c= | copy the URL to the kill ring, stay in the prompt                        |
+| =C-t=   | cycle sort order: =mru= → =title= → =domain= → =window=                  |
 
 Sort and typed-text are preserved across =M-k= and =C-t= — both
-re-fetch =GET_ALL_TABS= and re-enter the prompt with the same
-filter, so a chain of =M-k= presses with no typed text walks down
-the list cleanly.
+re-fetch and re-enter the prompt with the same filter, so a
+chain of =M-k= presses walks down the list cleanly.
 
-=M-x browsel-tab-manager-close-duplicates= sweeps duplicate tabs
-in one shot.  Two tabs are duplicates when their URLs match after
+With =consult= loaded, your =consult-narrow-key= filters
+candidates to a single browser in one keystroke (each connected
+browser becomes a narrow choice by first letter of its name).
+
+A prefix argument (=C-u M-x browsel-tab-jump=) prompts for one
+browser to restrict to.  Lisp callers can pass a name or a list
+of names as the optional =CLIENTS= argument.
+
+*** =browsel-tab-manager= — buffer view
+
+Opens =*browsel-tab-manager*= in =browsel-tab-manager-mode=
+(a =tabulated-list-mode= derivative).  One line per tab, dired-style
+marking, persistent so you can keep it around and refresh with =g=.
+
+The header line shows the current sort key, any active regex
+filter, whether URL view is on, and the tab count.
+
+Columns: an optional Client column, the =[flags]= column, the
+Domain column (or URL when toggled), and Title.  The one-character
+prefix left of the Client column is the mark tag — =D= for close,
+=B= for bookmark.
+
+Keymap:
+
+| Key          | Action                                                    |
+|--------------+-----------------------------------------------------------|
+| =RET=        | focus tab + raise browser window; stay in manager         |
+| =M-RET=      | preview: focus in browser without raising the window      |
+| =d=          | mark tab for deletion (=D= tag), advance                  |
+| =b=          | mark tab for bookmarking (=B= tag), advance               |
+| =u= / =U=    | unmark current line / unmark all                          |
+| =t=          | toggle every mark                                         |
+| =x=          | execute marks: bookmark =B='s, close =D='s (one confirm)  |
+| =D=          | close current tab immediately, no confirmation            |
+| =B=          | bookmark current tab immediately, prompt for name         |
+| =s=          | cycle sort: =mru= → =title= → =domain= → =window=         |
+| =v=          | toggle location column between hostname and full URL      |
+| =w=          | copy the current tab's URL to the kill ring               |
+| =/=          | regex filter on title / URL / domain (empty clears)       |
+| =/=~= d=     | mark all duplicate tabs for deletion                      |
+| =g=          | refresh from every connected browser                      |
+| =n= / =p=    | next / previous line                                      |
+| =q=          | quit-window                                               |
+| =?=          | =describe-mode= (full binding list, docstring, examples)  |
+
+Dired one-mark-per-row: pressing =d= on a =B=-marked row (or vice
+versa) replaces the tag rather than layering.
+
+Bookmarks are stored via =browsel-tab-manager-bookmark-function=
+(a defcustom; default writes a =bookmark-store= record with a
+browsel-owned handler that calls =browse-url= on jump).  Vanilla
+=bookmark-set= alone cannot make URL bookmarks — it captures the
+current buffer's location — so browsel provides its own tiny
+handler function and does not rely on external autoloads.  Users
+of bookmark+ can override the defcustom to plug in
+=bmkp-jump-url-browse= for a nicer =*Bookmark List*= classification.
+
+Immediate bookmarking (=B=) prompts for the name (default: tab
+title) and asks before overwriting an existing bookmark.  Batch
+bookmarking via =b= + =x= silently suffixes =<2>=, =<3>=, … on
+name collisions so no existing bookmark is overwritten during a
+batch.
+
+*** =browsel-tab-manager-close-duplicates=
+
+Sweeps duplicate tabs across every connected browser in one
+shot.  Two tabs are duplicates when their URLs match after
 stripping any =#fragment=; query parameters (=?id=1=) are kept
 distinct.  Pinned tabs are skipped.  The most-recently-accessed
 tab in each duplicate group is kept; the rest are closed after a
-=yes-or-no-p= confirmation showing the count.
-
-With one browser connected the tab manager targets that one.
-With two connected, set =browsel-default-client= in your config —
-or change it mid-session with =M-x browsel-set-default-client=
-(prefix arg clears it).  The interactive model is one browser at
-a time; programmatic callers can still pass an explicit CLIENT to
-the helpers to talk to either.
+=yes-or-no-p= confirmation listing the per-browser counts.  A
+prefix argument prompts for a single browser to restrict the
+sweep to.
 
 * Run JavaScript in any tab from Emacs
 
@@ -924,9 +992,12 @@ Configuration variables for paths, output locations, and credentials
 | =browsel-browse-url-preprocess-functions= | abnormal hook of URL-rewriting functions run before routing |
 | =browsel-clients-needing-activation= | client names whose macOS app needs an explicit foreground nudge after focus (default =("firefox")=) |
 | =browsel-client-app-names=        | fallback macOS application names per client when the PID-based activation can't find the process |
-| =browsel-tab-manager-sort=        | initial sort for jump-to-tab (default =mru=, cycle with =C-t=) |
-| =browsel-tab-manager-domain-column-width= | width of the domain column in jump-to-tab    |
-| =browsel-tab-manager-confirm-close= | when non-nil, =M-k= prompts before closing a tab |
+| =browsel-tab-manager-sort=        | initial sort key for both tab commands (default =mru=; cycle with =C-t= in jump, =s= in manager) |
+| =browsel-tab-manager-confirm-close= | when non-nil, =M-k= (jump) and =x= (manager, with =D= marks) prompt before closing.  =D= in the manager always bypasses. |
+| =browsel-tab-manager-domain-column-width= | width of the Domain column                    |
+| =browsel-tab-manager-url-column-width=    | width of the URL column when the manager's URL view (=v=) is on |
+| =browsel-tab-manager-client-column-width= | width of the Client column when 2+ browsers are represented |
+| =browsel-tab-manager-bookmark-function= | function used by the manager's =b= / =B= actions to save a bookmark; default calls =bookmark-store= with a browsel-owned handler that dispatches via =browse-url= |
 
 The full list is in =CONTRIBUTING.org=.
 

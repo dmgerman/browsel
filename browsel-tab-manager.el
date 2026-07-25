@@ -26,39 +26,49 @@
 ;;; Commentary:
 
 ;; Optional browsel module providing tab-management commands over
-;; the browsel WebSocket bridge.
+;; the browsel WebSocket bridge.  Two entry points:
 ;;
-;; Commands:
-;;
-;;   `browsel-tab-manager'
-;;     List every open tab and focus the pick.  Each row renders
-;;     `[flags] DOMAIN  TITLE' with separate faces so the three
-;;     columns are visually distinct.  In-prompt action keys:
+;;   `browsel-tab-jump'
+;;     Completing-read jumper.  Reads a tab via the minibuffer and
+;;     focuses it.  Each candidate renders as
+;;     `[CLIENT ][asi] DOMAIN  TITLE' with separate faces per
+;;     column.  In-prompt action keys:
 ;;       ?       help (legend + bindings)
 ;;       RET     focus the tab + window, exit
 ;;       M-RET   preview: show the tab in its window, stay in the prompt
 ;;       M-k     close the highlighted tab (see -confirm-close)
 ;;       C-c c   copy URL to the kill ring, stay in the prompt
 ;;       C-t     cycle sort: mru -> title -> domain -> window
-;;     Both M-k (no-confirm path) and C-t preserve the typed
-;;     filter on re-entry.
+;;     Both M-k and C-t preserve the typed filter on re-entry.
+;;
+;;   `browsel-tab-manager'
+;;     Persistent buffer view backed by `tabulated-list-mode'.  Opens
+;;     `*browsel-tab-manager*' with one line per tab across every
+;;     connected browser.  Dired-style marking: `d' marks a tab for
+;;     deletion, `x' executes marks, `D' closes the current tab
+;;     immediately.  `RET' focuses the tab (does not close the
+;;     buffer), `M-RET' previews without raising the browser window.
+;;     `g' refreshes, `s' cycles sort, `w' copies the URL, `/'
+;;     applies a regex filter, `= d' marks duplicates.  See
+;;     `describe-mode' inside the buffer for the full binding list.
 ;;
 ;;   `browsel-tab-manager-close-duplicates'
-;;     Close duplicate tabs in one sweep.  URLs match after the
-;;     `#fragment' is stripped; pinned tabs are skipped; the most-
-;;     recently-accessed tab in each duplicate group is kept.
-;;     Confirms with a count before closing anything.
+;;     One-shot duplicate sweep.  URLs match after the `#fragment' is
+;;     stripped; pinned tabs are skipped; the most-recently-accessed
+;;     tab in each group is kept.  Confirms with a count before
+;;     closing.
 ;;
-;; Which connected client (chrome / firefox) the tab manager
-;; addresses is the same default the rest of browsel uses — set
-;; `browsel-default-client' in `browsel.el' once and every command
-;; honours it.  With several clients connected and no default set,
-;; the resolver prompts.
+;; `browsel-default-client' is intentionally ignored by both entry
+;; points — every connected browser is always represented.  Pass an
+;; explicit CLIENTS argument (or use the prefix arg on `browsel-tab-jump')
+;; to restrict to a subset.
 ;;
 ;; User-tunable variables: `browsel-tab-manager-sort',
 ;; `browsel-tab-manager-confirm-close',
-;; `browsel-tab-manager-domain-column-width'.  Faces:
-;; `browsel-tab-manager-flags-face', `-domain-face', `-title-face'.
+;; `browsel-tab-manager-domain-column-width',
+;; `browsel-tab-manager-client-column-width'.  Faces:
+;; `browsel-tab-manager-flags-face', `-client-face', `-domain-face',
+;; `-title-face'.
 
 ;;; Code:
 
@@ -104,8 +114,31 @@ longer than this width are truncated with `…' (e.g. a user label
   :type 'integer
   :group 'browsel)
 
+(defcustom browsel-tab-manager-url-column-width 60
+  "Width of the URL column in `browsel-tab-manager-mode' when URL view is on.
+Toggled from the manager buffer with `v'; longer URLs are truncated
+with `…'.  The narrower `browsel-tab-manager-domain-column-width' is
+used when URL view is off (the default)."
+  :type 'integer
+  :group 'browsel)
+
+(defcustom browsel-tab-manager-bookmark-function
+  #'browsel-tab-manager-bookmark-default
+  "Function called to save a bookmark for a browsel tab.
+Called with two arguments — NAME (string) and TAB (plist as
+returned by `browsel-browser-tabs') — and expected to register a
+bookmark under NAME pointing at (plist-get TAB :url).  Return
+value is ignored.
+
+The default, `browsel-tab-manager-bookmark-default', stores a
+vanilla `bookmark-store' record with `browse-url-bookmark-jump'
+as the handler.  Users of `bookmark+' or another bookmark backend
+can plug in their own function here without editing browsel."
+  :type 'function
+  :group 'browsel)
+
 (defcustom browsel-tab-manager-sort 'mru
-  "Default sort order for `browsel-tab-manager' candidates.
+  "Default sort order for `browsel-tab-jump' and `browsel-tab-manager'.
 Symbol values:
   mru     by `lastAccessed' descending (most-recently-used first)
   title   alphabetically by tab title
@@ -124,11 +157,13 @@ minibuffer."
 
 (defcustom browsel-tab-manager-confirm-close t
   "Whether the in-prompt close key asks before closing a tab.
-When non-nil, `M-k' inside `browsel-tab-manager' prompts
-with `yes-or-no-p' showing the tab's title before issuing CLOSE_TAB.
-When nil, closures fire immediately on the first keystroke.
-Has no effect on `browsel-tab-manager-close-duplicates', which has
-its own count-based confirmation."
+When non-nil, `M-k' inside `browsel-tab-jump' and `x' inside
+`browsel-tab-manager' prompt with `yes-or-no-p' before issuing
+CLOSE_TAB.  When nil, closures fire immediately.  The
+buffer-view command `D' (immediate close of the current line)
+bypasses this variable by design.  Has no effect on
+`browsel-tab-manager-close-duplicates', which has its own
+count-based confirmation."
   :type 'boolean
   :group 'browsel)
 
@@ -404,7 +439,7 @@ form state close without a dialog.  Firefox behaves the same way."
 
 ;; ── In-prompt action keys for jump-to-tab ──────────────────────────────────
 ;;
-;; While `browsel-tab-manager' is reading a candidate the
+;; While `browsel-tab-jump' is reading a candidate the
 ;; following keys operate on the highlighted candidate:
 ;;
 ;;   ?       show a one-shot help buffer with the legend + bindings
@@ -419,13 +454,13 @@ form state close without a dialog.  Firefox behaves the same way."
 
 (defvar browsel-tab-manager--current-alist nil
   "Dynamic binding: alist of (DISPLAY . TAB) for the active prompt.
-Bound by `browsel-tab-manager' for the duration of the
+Bound by `browsel-tab-jump' for the duration of the
 `completing-read' call so the in-prompt action commands can look up
 the tab plist that backs the highlighted display string.")
 
 (defvar browsel-tab-manager--current-sort nil
   "Dynamic binding: sort key the active prompt is showing.
-Used by `browsel-tab-manager-jump-cycle-sort' to compute the next
+Used by `browsel-tab-jump-cycle-sort' to compute the next
 sort key without re-reading `browsel-tab-manager-sort' (which is the
 default, not the current state).")
 
@@ -458,11 +493,11 @@ through `try-completion'."
     (and (stringp display)
          (cdr (assoc display browsel-tab-manager--current-alist)))))
 
-(defun browsel-tab-manager-jump-help ()
-  "Show in-prompt help for `browsel-tab-manager'."
+(defun browsel-tab-jump-help ()
+  "Show in-prompt help for `browsel-tab-jump'."
   (interactive)
-  (with-help-window "*browsel-tab-manager help*"
-    (princ "browsel-tab-manager — jump-to-tab in-prompt actions\n")
+  (with-help-window "*browsel-tab-jump help*"
+    (princ "browsel-tab-jump — jump-to-tab in-prompt actions\n")
     (princ "\n")
     (princ "  Flag prefix [asi]:\n")
     (princ "    a — active tab in its window\n")
@@ -480,7 +515,7 @@ through `try-completion'."
     (princ "    C-t     cycle sort order (mru -> title -> domain -> window)\n")
     (princ "    RET     focus the tab + window, exit the prompt\n")))
 
-(defun browsel-tab-manager-jump-show-tab ()
+(defun browsel-tab-jump-show-tab ()
   "Make the highlighted tab the active tab in its browser window.
 Calls `FOCUS_TAB' without `:focusWindow' so the tab becomes visible
 inside its browser but the OS-level window is not raised — Emacs
@@ -508,7 +543,7 @@ typed filter is preserved."
                   (plist-get tab :title)
                   (error-message-string err)))))))
 
-(defun browsel-tab-manager-jump-copy-url ()
+(defun browsel-tab-jump-copy-url ()
   "Copy the highlighted candidate's tab URL to the kill ring."
   (interactive)
   (let* ((tab (browsel-tab-manager--current-tab))
@@ -518,7 +553,7 @@ typed filter is preserved."
                (message "Copied: %s" url))
       (message "No candidate selected"))))
 
-(defun browsel-tab-manager-jump-cycle-sort ()
+(defun browsel-tab-jump-cycle-sort ()
   "Re-open the jump-to-tab prompt under the next sort key.
 Signals the outer wrapper via `throw' so the prompt re-enters with
 fresh tabs, the next sort from `browsel-tab-manager--sort-cycle',
@@ -531,7 +566,7 @@ survives the cycle."
                :input  (minibuffer-contents-no-properties)
                :anchor nil)))
 
-(defun browsel-tab-manager-jump-close-tab ()
+(defun browsel-tab-jump-close-tab ()
   "Close the highlighted candidate's tab.
 Honours `browsel-tab-manager-confirm-close': when non-nil, asks
 via `yes-or-no-p' first; when nil, closes immediately.  Either
@@ -571,11 +606,11 @@ current sort key and tail-recurses."
                   (error-message-string err))))))))
 
 (defconst browsel-tab-manager--jump-bindings
-  '(("?"     . browsel-tab-manager-jump-help)
-    ("C-c c" . browsel-tab-manager-jump-copy-url)
-    ("M-k"   . browsel-tab-manager-jump-close-tab)
-    ("M-RET" . browsel-tab-manager-jump-show-tab)
-    ("C-t"   . browsel-tab-manager-jump-cycle-sort))
+  '(("?"     . browsel-tab-jump-help)
+    ("C-c c" . browsel-tab-jump-copy-url)
+    ("M-k"   . browsel-tab-jump-close-tab)
+    ("M-RET" . browsel-tab-jump-show-tab)
+    ("C-t"   . browsel-tab-jump-cycle-sort))
   "Single source of truth for jump-to-tab in-prompt keys.
 Installed onto whatever local map the active completion frontend
 \(vertico, icomplete, default) provides; see
@@ -583,7 +618,7 @@ Installed onto whatever local map the active completion frontend
 
 (defun browsel-tab-manager--install-keys ()
   "Add the in-prompt action keys to the current minibuffer's local map.
-Earlier code composed `browsel-tab-manager-jump-map' on top of the
+Earlier code composed `browsel-tab-jump-map' on top of the
 frontend's map via `make-composed-keymap', but that diverted RET
 lookups through the wrong fallback chain (the user's typed input
 came back empty).  Copying the active local map and inserting our
@@ -834,7 +869,7 @@ keyword and that contains a `:sort' key our sort cycle recognizes."
        (memq (plist-get next :sort) browsel-tab-manager--sort-cycle)))
 
 ;;;###autoload
-(defun browsel-tab-manager (&optional clients)
+(defun browsel-tab-jump (&optional clients)
   "Focus a tab in any connected browser, picked via completion.
 By default, aggregates tabs from every entry in
 `browsel-connected-clients' into one list —
@@ -866,10 +901,10 @@ routed to whichever client that tab came from.
 
 In-prompt keys (see also `?' inside the prompt):
   ?       legend + action-key help
-  \\[browsel-tab-manager-jump-copy-url]   copy the highlighted candidate's URL to the kill ring
-  \\[browsel-tab-manager-jump-close-tab]     close the highlighted candidate's tab and stay in the prompt
-  \\[browsel-tab-manager-jump-show-tab]   show the highlighted tab in its browser without raising the window
-  \\[browsel-tab-manager-jump-cycle-sort]     cycle the sort order"
+  \\[browsel-tab-jump-copy-url]   copy the highlighted candidate's URL to the kill ring
+  \\[browsel-tab-jump-close-tab]     close the highlighted candidate's tab and stay in the prompt
+  \\[browsel-tab-jump-show-tab]   show the highlighted tab in its browser without raising the window
+  \\[browsel-tab-jump-cycle-sort]     cycle the sort order"
   (interactive
    (list (browsel-tab-manager--maybe-prompt-client)))
   (browsel-tab-manager--run-prompt browsel-tab-manager-sort nil nil clients))
@@ -887,6 +922,563 @@ narrowing gesture."
         (user-error "Browsel-tab-manager: no client connected"))
       (completing-read "Browser: " connected nil t nil nil
                        (car connected)))))
+
+;; ── Buffer-view tab manager (tabulated-list-mode) ──────────────────────────
+;;
+;; `browsel-tab-manager' opens a persistent *browsel-tab-manager* buffer
+;; with one line per open tab, dired-style marking, and the same sort
+;; keys the jump command exposes.  The mark tag lives in the
+;; `tabulated-list-padding' area (not a format column), so the layout
+;; matches the jumper's per-row rendering plus a two-character mark
+;; prefix.
+
+(defvar-local browsel-tab-manager--tabs nil
+  "Alist mapping `tabulated-list-id' → tab plist for the current buffer.
+The id is a cons of the tab's browsel-instance UUID and its numeric
+tab id; that pair is unique across every connected browser and stable
+across refreshes.")
+
+(defvar-local browsel-tab-manager--filter nil
+  "Regex applied at refresh time; only tabs whose title, URL, or domain
+matches survive.  nil means no filter.")
+
+(defvar-local browsel-tab-manager--buffer-sort nil
+  "Current sort key for this buffer.
+Falls back to `browsel-tab-manager-sort' when nil.  Advanced via
+`s' or by cycling from the header row.")
+
+(defvar-local browsel-tab-manager--show-url nil
+  "When non-nil, the buffer shows each tab's full URL instead of just the domain.
+Toggled by `v'.")
+
+(defun browsel-tab-manager--row-id (tab)
+  "Return the tabulated-list-id key for TAB."
+  (cons (or (plist-get tab :browsel-instance) "?") (plist-get tab :id)))
+
+(defun browsel-tab-manager--tab-matches-filter-p (tab regex)
+  "Return non-nil when TAB's title, url, or domain matches REGEX."
+  (let ((title  (or (plist-get tab :title) ""))
+        (url    (or (plist-get tab :url)   ""))
+        (domain (browsel-tab-manager--url-host (plist-get tab :url))))
+    (or (string-match-p regex title)
+        (string-match-p regex url)
+        (string-match-p regex domain))))
+
+(defun browsel-tab-manager--format-columns (show-client show-url)
+  "Return the `tabulated-list-format' vector.
+Includes a Client column iff SHOW-CLIENT (two or more connected
+browsers represented in the current view).  When SHOW-URL is
+non-nil, the Domain column becomes a URL column widened to
+`browsel-tab-manager-url-column-width'."
+  (let* ((location-col
+          (if show-url
+              (list "URL" browsel-tab-manager-url-column-width t)
+            (list "Domain" browsel-tab-manager-domain-column-width t)))
+         (rest (vector '("Flags" 5 nil)
+                       location-col
+                       '("Title" 0 t))))
+    (if show-client
+        (apply #'vector
+               (list "Client" browsel-tab-manager-client-column-width t)
+               (append rest nil))
+      rest)))
+
+(defun browsel-tab-manager--build-entries (tabs show-client show-url)
+  "Return `tabulated-list-entries' rows for TABS.
+SHOW-CLIENT prepends the browser column; SHOW-URL renders the full
+URL (truncated to `browsel-tab-manager-url-column-width') instead of
+just the hostname."
+  (mapcar
+   (lambda (tab)
+     (let* ((flags    (propertize (browsel-tab-manager--flags tab)
+                                  'face 'browsel-tab-manager-flags-face))
+            (url      (or (plist-get tab :url) ""))
+            (location (propertize
+                       (if show-url
+                           (truncate-string-to-width
+                            url browsel-tab-manager-url-column-width
+                            0 ?\s "…")
+                         (or (browsel-tab-manager--url-host url) ""))
+                       'face 'browsel-tab-manager-domain-face))
+            (title    (propertize (or (plist-get tab :title) "(no title)")
+                                  'face 'browsel-tab-manager-title-face))
+            (client   (propertize (or (plist-get tab :browsel-browser) "?")
+                                  'face 'browsel-tab-manager-client-face)))
+       (list (browsel-tab-manager--row-id tab)
+             (if show-client
+                 (vector client flags location title)
+               (vector flags location title)))))
+   tabs))
+
+(defun browsel-tab-manager--refresh (&rest _)
+  "Fetch tabs, apply the buffer filter and sort, and repopulate the buffer.
+Preserves point on the same row-id when the tab still exists after
+refresh.  Called from `revert-buffer' (bound to `g' by
+`tabulated-list-mode') and from every action that changes tab
+state (execute, immediate close, filter change, sort cycle, URL
+toggle)."
+  (let* ((raw       (browsel-browser-tabs))
+         (filter    browsel-tab-manager--filter)
+         (show-url  browsel-tab-manager--show-url)
+         (kept      (if filter
+                        (seq-filter (lambda (tab)
+                                      (browsel-tab-manager--tab-matches-filter-p
+                                       tab filter))
+                                    raw)
+                      raw))
+         (sort-key  (or browsel-tab-manager--buffer-sort
+                        browsel-tab-manager-sort))
+         (sorted    (browsel-tab-manager--sort-tabs kept sort-key))
+         (clients   (delete-dups
+                     (mapcar (lambda (tab) (plist-get tab :browsel-browser))
+                             sorted)))
+         (show-c    (> (length clients) 1))
+         (target    (tabulated-list-get-id)))
+    (setq browsel-tab-manager--tabs
+          (mapcar (lambda (tab)
+                    (cons (browsel-tab-manager--row-id tab) tab))
+                  sorted))
+    (setq tabulated-list-format
+          (browsel-tab-manager--format-columns show-c show-url))
+    (setq tabulated-list-sort-key nil)  ; we sort ourselves
+    (setq tabulated-list-entries
+          (browsel-tab-manager--build-entries sorted show-c show-url))
+    (tabulated-list-init-header)
+    (tabulated-list-print t)
+    (when target
+      (goto-char (point-min))
+      (while (and (not (eobp))
+                  (not (equal (tabulated-list-get-id) target)))
+        (forward-line 1))
+      (when (eobp) (goto-char (point-min))))
+    ;; Header line: always-visible glanceable status.  Sort key is
+    ;; the primary signal; filter and URL-view are called out only
+    ;; when active so the header stays terse in the common case.
+    (setq header-line-format
+          (concat
+           (propertize " Sort: " 'face 'shadow)
+           (propertize (symbol-name sort-key) 'face 'bold)
+           (when show-url
+             (concat (propertize "  |  " 'face 'shadow)
+                     (propertize "URL view" 'face 'font-lock-keyword-face)))
+           (when filter
+             (concat (propertize "  |  Filter: " 'face 'shadow)
+                     (propertize (format "/%s/" filter)
+                                 'face 'font-lock-warning-face)))
+           (when (and clients (not show-c))
+             (concat (propertize "  |  " 'face 'shadow)
+                     (propertize (car clients)
+                                 'face 'browsel-tab-manager-client-face)))
+           (propertize
+            (format "  |  %d tab%s"
+                    (length sorted)
+                    (if (= (length sorted) 1) "" "s"))
+            'face 'shadow)))
+    ;; Keep mode-name short — the header-line carries the detail.
+    (setq mode-name (format "Tabs[%s]" sort-key))
+    (force-mode-line-update)))
+
+(defun browsel-tab-manager--tab-at-point ()
+  "Return the tab plist for the row point is on, or nil."
+  (cdr (assoc (tabulated-list-get-id) browsel-tab-manager--tabs)))
+
+;; ── Actions ────────────────────────────────────────────────────────────────
+
+(defun browsel-tab-manager-mark-delete (&optional _arg)
+  "Mark the tab on the current line for deletion and advance one line."
+  (interactive "p")
+  (tabulated-list-put-tag "D" t))
+
+(defun browsel-tab-manager-unmark (&optional _arg)
+  "Clear the mark on the tab on the current line and advance one line."
+  (interactive "p")
+  (tabulated-list-put-tag " " t))
+
+(defun browsel-tab-manager-unmark-all ()
+  "Clear marks from every tab in the buffer."
+  (interactive)
+  (save-excursion
+    (goto-char (point-min))
+    (while (not (eobp))
+      (tabulated-list-put-tag " " t))))
+
+(defun browsel-tab-manager-toggle-all-marks ()
+  "Toggle marks on every tab: marked rows unmark, unmarked rows mark."
+  (interactive)
+  (save-excursion
+    (goto-char (point-min))
+    (while (not (eobp))
+      (let ((char (char-after (line-beginning-position))))
+        (tabulated-list-put-tag (if (eq char ?D) " " "D") t)))))
+
+(defun browsel-tab-manager--marked-actions ()
+  "Return an alist of (row-id . tag) for every currently-marked row.
+TAG is `delete' for `D'-tagged rows and `bookmark' for `B'-tagged
+rows.  Rows in the order they appear in the buffer, so `x'
+executes top-to-bottom."
+  (let (marked)
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (let ((c (char-after (line-beginning-position))))
+          (cond ((eq c ?D) (push (cons (tabulated-list-get-id) 'delete)   marked))
+                ((eq c ?B) (push (cons (tabulated-list-get-id) 'bookmark) marked))))
+        (forward-line 1)))
+    (nreverse marked)))
+
+(defun browsel-tab-manager-execute ()
+  "Execute every mark: bookmark `B'-marked tabs, close `D'-marked tabs.
+Bookmarks fire first so a bookmark-then-close pair still records
+the URL before it becomes unreachable.  Bookmark names are the
+tab's title; collisions get a `<N>' suffix so no existing bookmark
+is silently overwritten.  Honours `browsel-tab-manager-confirm-close'
+for the count prompt when any `D' marks are present."
+  (interactive)
+  (let* ((marked    (browsel-tab-manager--marked-actions))
+         (deletes   (seq-filter (lambda (m) (eq (cdr m) 'delete))   marked))
+         (bookmarks (seq-filter (lambda (m) (eq (cdr m) 'bookmark)) marked))
+         (nd (length deletes))
+         (nb (length bookmarks)))
+    (cond
+     ((zerop (+ nd nb))
+      (message "No tabs marked"))
+     ((and (> nd 0)
+           browsel-tab-manager-confirm-close
+           (not (yes-or-no-p
+                 (if (> nb 0)
+                     (format "Execute: bookmark %d, close %d? " nb nd)
+                   (format "Close %d marked tab%s? "
+                           nd (if (= nd 1) "" "s"))))))
+      (message "browsel-tab-manager: cancelled"))
+     (t
+      (let ((booked 0) (closed 0))
+        (dolist (m bookmarks)
+          (let ((tab (cdr (assoc (car m) browsel-tab-manager--tabs))))
+            (when tab
+              (condition-case err
+                  (let* ((raw  (or (plist-get tab :title) "(untitled)"))
+                         (name (browsel-tab-manager--unique-bookmark-name raw)))
+                    (funcall browsel-tab-manager-bookmark-function name tab)
+                    (setq booked (1+ booked)))
+                (error
+                 (message "Bookmark failed for %s: %s"
+                          (plist-get tab :title)
+                          (error-message-string err)))))))
+        (dolist (m deletes)
+          (let ((tab (cdr (assoc (car m) browsel-tab-manager--tabs))))
+            (when tab
+              (condition-case err
+                  (progn (browsel-close-tab tab)
+                         (setq closed (1+ closed)))
+                (error
+                 (message "Could not close %s: %s"
+                          (plist-get tab :title)
+                          (error-message-string err)))))))
+        (message "browsel-tab-manager: bookmarked %d/%d, closed %d/%d"
+                 booked nb closed nd)
+        (browsel-tab-manager--refresh))))))
+
+(defun browsel-tab-manager-delete-immediate ()
+  "Close the tab on the current line immediately, no mark, no confirmation."
+  (interactive)
+  (let ((tab (browsel-tab-manager--tab-at-point)))
+    (cond
+     ((null tab)
+      (message "No tab on this line"))
+     (t
+      (condition-case err
+          (progn
+            (browsel-close-tab tab)
+            (browsel-tab-manager--refresh)
+            (message "Closed %s" (plist-get tab :title)))
+        (error
+         (message "Could not close %s: %s"
+                  (plist-get tab :title)
+                  (error-message-string err))))))))
+
+(defun browsel-tab-manager-visit-tab ()
+  "Focus the tab on the current line, raising its browser window.
+Stays in the manager buffer.  Compare `browsel-tab-manager-preview-tab',
+which does not raise the browser window."
+  (interactive)
+  (let ((tab (browsel-tab-manager--tab-at-point)))
+    (if (null tab)
+        (message "No tab on this line")
+      (condition-case err
+          (browsel-focus-tab tab t)
+        (error
+         (message "Could not focus %s: %s"
+                  (plist-get tab :title)
+                  (error-message-string err)))))))
+
+(defun browsel-tab-manager-preview-tab ()
+  "Show the tab on the current line in its browser without raising the window.
+Stays in the manager buffer with Emacs still focused."
+  (interactive)
+  (let ((tab (browsel-tab-manager--tab-at-point)))
+    (if (null tab)
+        (message "No tab on this line")
+      (condition-case err
+          (browsel-focus-tab tab nil)
+        (error
+         (message "Could not preview %s: %s"
+                  (plist-get tab :title)
+                  (error-message-string err)))))))
+
+(defun browsel-tab-manager-cycle-sort ()
+  "Cycle the sort key through mru → title → domain → window → mru."
+  (interactive)
+  (setq browsel-tab-manager--buffer-sort
+        (browsel-tab-manager--next-sort
+         (or browsel-tab-manager--buffer-sort browsel-tab-manager-sort)))
+  (browsel-tab-manager--refresh))
+
+(defun browsel-tab-manager-toggle-url ()
+  "Toggle the location column between hostname (default) and full URL.
+When URL view is on the column becomes `URL' with a wider width
+\(`browsel-tab-manager-url-column-width') and each row shows the
+tab's full URL, truncated with `…' if longer.  The header line
+displays `URL view' while active."
+  (interactive)
+  (setq browsel-tab-manager--show-url (not browsel-tab-manager--show-url))
+  (browsel-tab-manager--refresh))
+
+(defun browsel-tab-manager-copy-url ()
+  "Copy the URL of the tab on the current line to the kill ring."
+  (interactive)
+  (let* ((tab (browsel-tab-manager--tab-at-point))
+         (url (and tab (plist-get tab :url))))
+    (if (and (stringp url) (not (string-empty-p url)))
+        (progn (kill-new url)
+               (message "Copied: %s" url))
+      (message "No URL on this line"))))
+
+(defun browsel-tab-manager-set-filter (regex)
+  "Filter the buffer to rows whose title, URL, or domain match REGEX.
+Empty input clears the filter.  The current filter is shown in the
+mode line as `/REGEX/'."
+  (interactive
+   (list (read-string
+          (format "Filter regex (%s): "
+                  (if browsel-tab-manager--filter
+                      (format "current: /%s/, empty clears"
+                              browsel-tab-manager--filter)
+                    "empty clears"))
+          nil nil "")))
+  (setq browsel-tab-manager--filter
+        (and (stringp regex) (not (string-empty-p regex)) regex))
+  (browsel-tab-manager--refresh))
+
+(defun browsel-tab-manager-mark-duplicates ()
+  "Mark duplicate tabs (older copies) for deletion.
+Uses the same rule as `browsel-tab-manager-close-duplicates': URLs
+match after `#fragment' strip, pinned tabs are skipped, and the
+most-recently-accessed tab in each group is kept.  Duplicates are
+computed within each browser separately."
+  (interactive)
+  (let* ((tabs       (mapcar #'cdr browsel-tab-manager--tabs))
+         (victims    (browsel-tab-manager--duplicate-victims tabs))
+         (victim-ids (mapcar #'browsel-tab-manager--row-id victims)))
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (when (member (tabulated-list-get-id) victim-ids)
+          (tabulated-list-put-tag "D" nil))
+        (forward-line 1)))
+    (message "Marked %d duplicate tab%s"
+             (length victim-ids)
+             (if (= (length victim-ids) 1) "" "s"))))
+
+;; ── Bookmark support ──────────────────────────────────────────────────────
+;;
+;; `b' marks the current row with a `B' tag; `x' bookmarks every
+;; B-marked tab using the tab's title as the bookmark name.  `B'
+;; bookmarks the current tab immediately, prompting for the name
+;; (default = tab title).  The backend is
+;; `browsel-tab-manager-bookmark-function' — plug in bookmark+ or
+;; another store by overriding the defcustom.
+
+(defun browsel-tab-manager-bookmark-jump (bookmark)
+  "Handler for URL bookmarks created by `browsel-tab-manager-bookmark-default'.
+Reads the URL from BOOKMARK's `filename' entry and dispatches
+via `browse-url'.  Guaranteed to be available whenever
+browsel-tab-manager itself is loaded, so it does not depend on
+`browse-url-bookmark-jump' (not autoloaded in every Emacs) or
+`bmkp-jump-url-browse' (only present with bookmark+)."
+  (let ((url (bookmark-prop-get bookmark 'filename)))
+    (unless (and (stringp url) (not (string-empty-p url)))
+      (error "browsel-tab-manager-bookmark-jump: no URL in bookmark"))
+    (browse-url url)))
+
+(defun browsel-tab-manager-bookmark-default (name tab)
+  "Default bookmark backend using `browsel-tab-manager-bookmark-jump'.
+Stores a `bookmark-store' record named NAME whose `filename' is
+TAB's URL and whose `handler' is our own jumper.  Users with
+bookmark+ can override `browsel-tab-manager-bookmark-function' to
+plug in `bmkp-jump-url-browse' for a nicer `*Bookmark List*'
+display — but the default works everywhere, no autoload required."
+  (let ((url (or (plist-get tab :url) "")))
+    (bookmark-store name
+                    `((filename . ,url)
+                      (handler  . browsel-tab-manager-bookmark-jump))
+                    nil)))
+
+(defun browsel-tab-manager--unique-bookmark-name (name)
+  "Return NAME, or NAME<N> for the smallest N that avoids a collision.
+Used by the batch (`x') bookmark path so a name-collision does not
+overwrite a prior bookmark silently.  The immediate path (`B') asks
+the user directly and does not go through this helper."
+  (if (not (bookmark-get-bookmark name t))
+      name
+    (cl-loop for n from 2
+             for candidate = (format "%s<%d>" name n)
+             unless (bookmark-get-bookmark candidate t)
+             return candidate)))
+
+(defun browsel-tab-manager-mark-bookmark (&optional _arg)
+  "Mark the tab on the current line for bookmarking and advance one line.
+Executed by `x' using the tab's title as the bookmark name; use
+`B' to bookmark immediately with a prompt.  A prior `D' mark on
+this row is overwritten (dired: one mark per row)."
+  (interactive "p")
+  (tabulated-list-put-tag "B" t))
+
+(defun browsel-tab-manager-bookmark-immediate ()
+  "Bookmark the tab on the current line immediately, prompting for the name.
+Default at the prompt is the tab's title.  If a bookmark under
+that name already exists the user is asked whether to overwrite;
+answering `n' aborts the operation."
+  (interactive)
+  (let ((tab (browsel-tab-manager--tab-at-point)))
+    (cond
+     ((null tab)
+      (message "No tab on this line"))
+     (t
+      (let* ((default-name (or (plist-get tab :title) "(untitled)"))
+             (name (read-string
+                    (format "Bookmark name (default %s): " default-name)
+                    nil nil default-name)))
+        (cond
+         ((or (null name) (string-empty-p name))
+          (message "Bookmark aborted (empty name)"))
+         ((and (bookmark-get-bookmark name t)
+               (not (yes-or-no-p
+                     (format "Bookmark %S exists — overwrite? " name))))
+          (message "Bookmark aborted"))
+         (t
+          (condition-case err
+              (progn
+                (funcall browsel-tab-manager-bookmark-function name tab)
+                (message "Bookmarked %s" name))
+            (error
+             (message "Bookmark failed: %s" (error-message-string err))))))))))
+  nil)
+
+;; ── Keymap and mode ────────────────────────────────────────────────────────
+
+(defvar browsel-tab-manager-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET")        #'browsel-tab-manager-visit-tab)
+    (define-key map (kbd "<return>")   #'browsel-tab-manager-visit-tab)
+    (define-key map (kbd "M-RET")      #'browsel-tab-manager-preview-tab)
+    (define-key map (kbd "M-<return>") #'browsel-tab-manager-preview-tab)
+    (define-key map (kbd "d")          #'browsel-tab-manager-mark-delete)
+    (define-key map (kbd "b")          #'browsel-tab-manager-mark-bookmark)
+    (define-key map (kbd "B")          #'browsel-tab-manager-bookmark-immediate)
+    (define-key map (kbd "u")          #'browsel-tab-manager-unmark)
+    (define-key map (kbd "U")          #'browsel-tab-manager-unmark-all)
+    (define-key map (kbd "t")          #'browsel-tab-manager-toggle-all-marks)
+    (define-key map (kbd "x")          #'browsel-tab-manager-execute)
+    (define-key map (kbd "D")          #'browsel-tab-manager-delete-immediate)
+    (define-key map (kbd "s")          #'browsel-tab-manager-cycle-sort)
+    (define-key map (kbd "w")          #'browsel-tab-manager-copy-url)
+    (define-key map (kbd "/")          #'browsel-tab-manager-set-filter)
+    (define-key map (kbd "v")          #'browsel-tab-manager-toggle-url)
+    (define-key map (kbd "= d")        #'browsel-tab-manager-mark-duplicates)
+    map)
+  "Keymap for `browsel-tab-manager-mode'.
+`g' (refresh), `n' / `p' (line navigation), and `q' (quit-window)
+are inherited from `tabulated-list-mode' / `special-mode'.")
+
+(define-derived-mode browsel-tab-manager-mode tabulated-list-mode "Tabs"
+  "Major mode for browsing and managing open browser tabs across
+every connected browser.  See the keymap below.
+
+Columns:
+  Client     the browser that owns the tab (chrome, firefox,
+             or a user-set label like `chrome-work').  Shown only
+             when two or more browsers are represented in the
+             current view; suppressed for single-browser views.
+  Flags      three characters describing tab state; a lowercase
+             letter means the flag is set, a space means it is
+             not:
+               a   active — the focused tab in its window
+               s   sound — audible (playing audio)
+               i   incognito
+  Domain     the URL's host, truncated to
+             `browsel-tab-manager-domain-column-width'.  When
+             URL view is toggled on (`v'), the column becomes
+             `URL' and shows the full URL truncated to
+             `browsel-tab-manager-url-column-width'.
+  Title      the tab's title as reported by the browser.
+
+The header line above the table shows the current sort key, the
+active regex filter (when any), and `URL view' (when the URL
+toggle is on).
+
+The one-character prefix left of the Client column is the
+mark tag: `D' means the tab is marked for closing by `x', and
+`B' means the tab is marked for bookmarking by `x' (using the
+tab's title as the bookmark name).  One mark per row — pressing
+`d' on a `B'-marked row replaces the tag, dired-style.
+
+\\<browsel-tab-manager-mode-map>
+Marking (dired-style — one mark per row):
+  \\[browsel-tab-manager-mark-delete]     mark the current tab for deletion   (`D' tag)
+  \\[browsel-tab-manager-mark-bookmark]     mark the current tab for bookmarking (`B' tag)
+  \\[browsel-tab-manager-unmark]     clear the mark on the current tab
+  \\[browsel-tab-manager-unmark-all]     clear every mark
+  \\[browsel-tab-manager-toggle-all-marks]     toggle every mark (delete-marks only)
+  \\[browsel-tab-manager-mark-duplicates]   mark duplicate tabs for deletion
+
+Acting on tabs:
+  \\[browsel-tab-manager-execute]     execute marks: bookmark `B's, close `D's (single confirm for closes)
+  \\[browsel-tab-manager-delete-immediate]     close the current tab immediately, no confirmation
+  \\[browsel-tab-manager-bookmark-immediate]     bookmark the current tab immediately, prompting for the name
+  \\[browsel-tab-manager-visit-tab]   focus the current tab and raise its browser window; stay in manager
+  \\[browsel-tab-manager-preview-tab]   preview the current tab in its browser without raising the window
+
+Buffer state:
+  \\[revert-buffer]     refresh (re-fetch every browser's tabs)
+  \\[browsel-tab-manager-cycle-sort]     cycle sort key (mru → title → domain → window)
+  \\[browsel-tab-manager-set-filter]     regex filter on title / URL / domain (empty clears)
+  \\[browsel-tab-manager-toggle-url]     toggle the location column between hostname and full URL
+  \\[browsel-tab-manager-copy-url]     copy the current tab's URL to the kill ring
+  q     quit-window
+
+Row id is (INSTANCE . TAB-ID); the same tab keeps its point
+position across refreshes even when the surrounding list has
+changed."
+  (setq tabulated-list-padding 2)
+  (setq revert-buffer-function #'browsel-tab-manager--refresh))
+
+;;;###autoload
+(defun browsel-tab-manager ()
+  "Open the *browsel-tab-manager* buffer listing every browser's tabs.
+See `browsel-tab-manager-mode' for the keymap and behaviour.
+Unlike `browsel-tab-jump' (the completing-read entry point), this
+command opens a persistent buffer you can leave open and refresh
+with `g'.  `browsel-default-client' is ignored — every connected
+browser is represented; use the buffer-local filter (`/') or the
+consult-style narrow-by-typing to focus on a subset."
+  (interactive)
+  (unless (browsel-connected-clients)
+    (user-error "Browsel: no browser connected"))
+  (let ((buf (get-buffer-create "*browsel-tab-manager*")))
+    (with-current-buffer buf
+      (browsel-tab-manager-mode)
+      (browsel-tab-manager--refresh))
+    (pop-to-buffer buf)))
 
 (provide 'browsel-tab-manager)
 
