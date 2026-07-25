@@ -1,0 +1,33 @@
+#+title: browsel — ChangeLog
+#+author: Daniel M. German
+
+* 0.94 
+
+- Renaming or clearing the client label now takes effect on the next
+  connection.  Previously a relabel could be silently overridden by
+  the persisted registry entry.
+- Firefox tabs no longer over-report their active tab as "just now"
+  when the browser has no OS focus, so the tab manager's MRU order
+  reflects reality.
+- Popup shows an actionable banner when the extension background
+  script fails to load (was previously silent — see issue #1).
+- =browsel-browse-url= gains =browsel-browse-url-preprocess-functions=,
+  a hook that rewrites URLs before routing.
+
+* 0.93
+
+- Two profiles or two installs of the same browser can now both
+  connect; each gets a stable display name across sessions.  Set a
+  distinctive =Client label= on each in the extension's options page
+  to avoid the =chrome=/=chrome-XXXXXX= fallback.
+- Names persist across Emacs restarts in =browsel-clients-file=.
+- Popup shows the client's display name and instance UUID.
+- Public API for downstream packages: =browsel-browsers=,
+  =browsel-browser-tabs=, =browsel-focus-tab=, =browsel-close-tab=.
+  See the *API* section of =README.org=.
+- =browsel-tab-manager= aggregates tabs from every connected browser
+  in one MRU list.  With consult loaded, =consult-narrow-key=
+  filters to a single browser.  A prefix argument
+  (=C-u M-x browsel-tab-manager=) restricts to one browser.
+- =vertico= is now a hard dependency of =browsel-tab-manager=;
+  =consult= is optional.
