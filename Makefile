@@ -36,7 +36,7 @@ ELPA_DIR = .elpa
 # Dependencies installed into the project-local ELPA before lint/compile.
 # `websocket' is the runtime dependency declared in browsel.el's
 # Package-Requires; `package-lint' is the lint tool itself.
-DEPS = websocket package-lint
+DEPS = websocket package-lint vertico
 
 # Common Emacs invocation header: project-local package-user-dir, MELPA in
 # package-archives, package-initialize so installed packages are on load-path.

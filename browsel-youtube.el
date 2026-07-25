@@ -51,9 +51,17 @@
 (require 'seq)
 
 ;; Forward declarations for dynamic vars and functions from org-capture/org.
+;; `org-link-preview-region' was added in org 9.7 and is preferred when
+;; available; `org-display-inline-images' is the older API kept for
+;; older org versions.  The trailing `t' (FILEONLY) tells
+;; `check-declare' to verify only that the file exists — not the
+;; function signature — because the exact file that provides each
+;; entry point shifts across org versions (ol.el, org.el, org-compat.el).
+;; The runtime caller guards with `fboundp' regardless.
 (defvar org-capture-templates)
-(declare-function org-link-preview-region "ol"         (&optional arg interactive? beg end))
-(declare-function org-capture             "org-capture" (&optional goto keys))
+(declare-function org-link-preview-region    "ol"  (&optional arg interactive? beg end) t)
+(declare-function org-display-inline-images  "org" (&optional include-linked refresh beg end) t)
+(declare-function org-capture                "org-capture" (&optional goto keys))
 
 ;; ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -294,10 +302,16 @@ Schedules the capture and returns immediately (respond-fast-then-defer)."
                           (error-message-string err)))))
 
 (defun browsel-youtube--refresh-inline-images ()
-  "Refresh inline images when visiting `browsel-youtube-videos-file'."
+  "Refresh inline images when visiting `browsel-youtube-videos-file'.
+Uses `org-link-preview-region' (org 9.7+) when available and falls
+back to `org-display-inline-images' on older org versions."
   (when (string-match (regexp-quote (expand-file-name browsel-youtube-videos-file))
                       (or (buffer-file-name) ""))
-    (org-link-preview-region nil nil (point-min) (point-max))))
+    (cond
+     ((fboundp 'org-link-preview-region)
+      (org-link-preview-region nil nil (point-min) (point-max)))
+     ((fboundp 'org-display-inline-images)
+      (org-display-inline-images nil nil (point-min) (point-max))))))
 
 (defun browsel-youtube--video-for-later (url title selection)
   "Capture YouTube video URL into `browsel-youtube-videos-file'.

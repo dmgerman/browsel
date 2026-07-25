@@ -77,6 +77,10 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'seq)
+;; `bookmark' is a built-in Emacs library; required by the manager's
+;; `b'/`B'/`x' bookmark actions (bookmark-store, bookmark-get-bookmark,
+;; bookmark-prop-get).
+(require 'bookmark)
 
 ;; Soft-require: when consult is loaded we use `consult--read' so the
 ;; user's `consult-narrow-key' becomes the per-client filter shortcut.
@@ -939,8 +943,9 @@ tab id; that pair is unique across every connected browser and stable
 across refreshes.")
 
 (defvar-local browsel-tab-manager--filter nil
-  "Regex applied at refresh time; only tabs whose title, URL, or domain
-matches survive.  nil means no filter.")
+  "Buffer-local regex filter for `browsel-tab-manager-mode', or nil.
+When non-nil, only tabs whose title, URL, or domain match the
+regex survive the refresh.  Set via `browsel-tab-manager-set-filter'.")
 
 (defvar-local browsel-tab-manager--buffer-sort nil
   "Current sort key for this buffer.
@@ -1307,7 +1312,7 @@ browsel-tab-manager itself is loaded, so it does not depend on
 `bmkp-jump-url-browse' (only present with bookmark+)."
   (let ((url (bookmark-prop-get bookmark 'filename)))
     (unless (and (stringp url) (not (string-empty-p url)))
-      (error "browsel-tab-manager-bookmark-jump: no URL in bookmark"))
+      (error "Browsel-tab-manager-bookmark-jump: no URL in bookmark"))
     (browse-url url)))
 
 (defun browsel-tab-manager-bookmark-default (name tab)
@@ -1401,8 +1406,9 @@ answering `n' aborts the operation."
 are inherited from `tabulated-list-mode' / `special-mode'.")
 
 (define-derived-mode browsel-tab-manager-mode tabulated-list-mode "Tabs"
-  "Major mode for browsing and managing open browser tabs across
-every connected browser.  See the keymap below.
+  "Major mode for the *browsel-tab-manager* buffer.
+Lists open tabs across every connected browser and offers
+dired-style marking for bookmark and close actions.
 
 Columns:
   Client     the browser that owns the tab (chrome, firefox,
@@ -1454,7 +1460,7 @@ Buffer state:
   \\[browsel-tab-manager-set-filter]     regex filter on title / URL / domain (empty clears)
   \\[browsel-tab-manager-toggle-url]     toggle the location column between hostname and full URL
   \\[browsel-tab-manager-copy-url]     copy the current tab's URL to the kill ring
-  q     quit-window
+  q     `quit-window'
 
 Row id is (INSTANCE . TAB-ID); the same tab keeps its point
 position across refreshes even when the surrounding list has
@@ -1466,7 +1472,7 @@ changed."
 (defun browsel-tab-manager ()
   "Open the *browsel-tab-manager* buffer listing every browser's tabs.
 See `browsel-tab-manager-mode' for the keymap and behaviour.
-Unlike `browsel-tab-jump' (the completing-read entry point), this
+Unlike `browsel-tab-jump' (the `completing-read' entry point), this
 command opens a persistent buffer you can leave open and refresh
 with `g'.  `browsel-default-client' is ignored — every connected
 browser is represented; use the buffer-local filter (`/') or the
