@@ -533,13 +533,11 @@ survives the cycle."
 
 (defun browsel-tab-manager-jump-close-tab ()
   "Close the highlighted candidate's tab.
-Honours `browsel-tab-manager-confirm-close': when non-nil prompts
-with `yes-or-no-p' and leaves you in the prompt afterwards (so a
-deliberate close is followed by a stable candidate view).  When
-nil the closure fires immediately and the prompt is re-entered
-with a fresh `GET_ALL_TABS' under the current sort so the closed
-tab is gone from the list — chains of `M-k' without typed text
-land cleanly.
+Honours `browsel-tab-manager-confirm-close': when non-nil, asks
+via `yes-or-no-p' first; when nil, closes immediately.  Either
+way, after a successful close the prompt re-enters with a fresh
+`GET_ALL_TABS' under the current sort so the closed tab is gone
+from the list — chains of `M-k' without typed text land cleanly.
 
 The re-entry signal is a `throw' to `browsel-tab-manager--cycle';
 the catch in `browsel-tab-manager--run-prompt' receives the
@@ -559,11 +557,14 @@ current sort key and tail-recurses."
             (browsel-request "CLOSE_TAB"
                              `(:id ,(plist-get tab :id))
                              (plist-get tab :browsel-browser))
-            (unless browsel-tab-manager-confirm-close
-              (throw 'browsel-tab-manager--cycle
-                     (list :sort   browsel-tab-manager--current-sort
-                           :input  (minibuffer-contents-no-properties)
-                           :anchor (browsel-tab-manager--anchor-above-id)))))
+            ;; Refresh the candidate list so the closed tab disappears.
+            ;; `browsel-tab-manager-confirm-close' still controls the
+            ;; ask-first behaviour above; once a close has actually
+            ;; happened, the prompt should reflect it.
+            (throw 'browsel-tab-manager--cycle
+                   (list :sort   browsel-tab-manager--current-sort
+                         :input  (minibuffer-contents-no-properties)
+                         :anchor (browsel-tab-manager--anchor-above-id))))
         (error
          (message "Could not close %s: %s"
                   (plist-get tab :title)
