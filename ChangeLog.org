@@ -1,6 +1,12 @@
 #+title: browsel — ChangeLog
 #+author: Daniel M. German
 
+* development
+
+- Replace browsel-tab-manager with browel-tab-jump
+- Add browsel-tab-manager as a dired style buffer where you can
+  delete, bookmark or jump to open tabs.
+
 * 0.94 
 
 - Renaming or clearing the client label now takes effect on the next
