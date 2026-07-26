@@ -16,6 +16,12 @@ const identityNameEl     = document.getElementById("identity-name");
 const identityNameHintEl = document.getElementById("identity-name-hint");
 const identityUuidEl     = document.getElementById("identity-uuid");
 const swErrorEl          = document.getElementById("sw-error");
+const versionEl          = document.getElementById("version");
+
+// Show the extension's version next to the Browsel title so a user
+// glancing at the popup can tell which build is loaded — matches
+// what the options page has always shown.
+versionEl.textContent = `v${api.runtime.getManifest().version}`;
 
 const LOGO_DEFAULT = "../icons/icon128.png";
 const LOGO_RED     = "../icons/icon-red-128.png";

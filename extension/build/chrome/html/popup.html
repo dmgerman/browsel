@@ -12,6 +12,12 @@
       margin: 0;
     }
     h1 { font-size: 13px; margin: 0; }
+    h1 .version {
+      font-size: 11px;
+      font-weight: normal;
+      color: #999;
+      margin-left: 4px;
+    }
     .header {
       display: flex;
       justify-content: space-between;
@@ -187,7 +193,7 @@
 </head>
 <body>
   <div class="header">
-    <h1>Browsel</h1>
+    <h1>Browsel <span id="version" class="version"></span></h1>
     <img id="logo" class="logo" src="../icons/icon128.png" alt="">
   </div>
 
