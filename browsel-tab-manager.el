@@ -147,13 +147,15 @@ Symbol values:
   mru     by `lastAccessed' descending (most-recently-used first)
   title   alphabetically by tab title
   domain  alphabetically by URL host
-  window  by `windowId' then `index' (visual tab order per window)
+  window  by browser, then `windowId', then `index'; groups
+          same-client tabs together and orders them by window
+          number matching the `CLIENT:N' rendering in the manager
 The in-prompt `C-t' key cycles through these without leaving the
 minibuffer."
   :type '(choice (const :tag "Most recently used" mru)
                  (const :tag "Title"               title)
                  (const :tag "Domain"              domain)
-                 (const :tag "Window order"        window))
+                 (const :tag "Client / window"     window))
   :group 'browsel)
 
 (defconst browsel-tab-manager--sort-cycle '(mru title domain window)
@@ -288,13 +290,25 @@ through unchanged."
                                (plist-get tab :url))))
                   #'string< tabs))
     ('window
+     ;; Primary key: browser (alphabetical, so all Chrome tabs come
+     ;; before all Firefox tabs, etc.).  Secondary: windowId within
+     ;; the browser (so `chrome:0' tabs precede `chrome:1' tabs).
+     ;; Tertiary: :index (visual tab order within a window).  Ties
+     ;; the display order to the client-column grouping the reader
+     ;; already sees.
      (seq-sort (lambda (a b)
-                 (let ((wa (or (plist-get a :windowId) 0))
-                       (wb (or (plist-get b :windowId) 0)))
-                   (if (= wa wb)
-                       (< (or (plist-get a :index) 0)
-                          (or (plist-get b :index) 0))
-                     (< wa wb))))
+                 (let ((ca (or (plist-get a :browsel-browser) ""))
+                       (cb (or (plist-get b :browsel-browser) ""))
+                       (wa (or (plist-get a :windowId) 0))
+                       (wb (or (plist-get b :windowId) 0))
+                       (ia (or (plist-get a :index) 0))
+                       (ib (or (plist-get b :index) 0)))
+                   (cond
+                    ((string< ca cb) t)
+                    ((string< cb ca) nil)
+                    ((< wa wb)       t)
+                    ((< wb wa)       nil)
+                    (t               (< ia ib)))))
                tabs))
     (_ tabs)))
 
@@ -956,6 +970,22 @@ Falls back to `browsel-tab-manager-sort' when nil.  Advanced via
   "When non-nil, the buffer shows each tab's full URL instead of just the domain.
 Toggled by `v'.")
 
+(defvar-local browsel-tab-manager--client-column-mode 'auto
+  "Visibility mode for the Client column.
+One of the symbols:
+  `auto'  — show the column when two or more browsers are represented
+            in the current view (the default; matches the pre-toggle
+            behavior).
+  `on'    — always show, even when a single browser is connected.
+  `off'   — never show, even when multiple browsers are connected.
+Cycled by `r' in the manager buffer.")
+
+(defvar-local browsel-tab-manager--window-numbers nil
+  "Alist mapping (browser . windowId) → integer per-browser window index.
+Recomputed by every `--refresh'.  A window's index is stable within a
+single refresh but not across refreshes when windows are opened or
+closed; the numbering re-derives from the current `windowId' set.")
+
 (defun browsel-tab-manager--row-id (tab)
   "Return the tabulated-list-id key for TAB."
   (cons (or (plist-get tab :browsel-instance) "?") (plist-get tab :id)))
@@ -988,11 +1018,56 @@ non-nil, the Domain column becomes a URL column widened to
                (append rest nil))
       rest)))
 
-(defun browsel-tab-manager--build-entries (tabs show-client show-url)
+(defun browsel-tab-manager--compute-window-numbers (tabs)
+  "Return an alist mapping (BROWSER . WINDOWID) → integer index for TABS.
+For each browser, its distinct `:windowId' values across TABS are
+sorted ascending and numbered from 0, so `chrome:0' is the Chrome
+window with the smallest windowId currently seen, `chrome:1' the
+next, etc.  Numbering is per-browser and re-derived on every
+refresh."
+  (let ((per-browser (make-hash-table :test #'equal))
+        (result '()))
+    (dolist (tab tabs)
+      (let* ((b (plist-get tab :browsel-browser))
+             (w (plist-get tab :windowId))
+             (seen (gethash b per-browser)))
+        (when (and b (numberp w) (not (member w seen)))
+          (puthash b (cons w seen) per-browser))))
+    (maphash
+     (lambda (browser wins)
+       (let ((sorted (sort (copy-sequence wins) #'<))
+             (i 0))
+         (dolist (w sorted)
+           (push (cons (cons browser w) i) result)
+           (setq i (1+ i)))))
+     per-browser)
+    result))
+
+(defun browsel-tab-manager--multi-window-browsers (tabs)
+  "Return the set of browser names in TABS with 2+ distinct windows.
+The client label of tabs from these browsers gets a `:N' suffix so
+you can tell same-browser different-window tabs apart at a glance.
+Single-window browsers stay as plain `chrome' / `firefox'."
+  (let ((per-browser (make-hash-table :test #'equal))
+        (multi '()))
+    (dolist (tab tabs)
+      (let* ((b (plist-get tab :browsel-browser))
+             (w (plist-get tab :windowId))
+             (seen (gethash b per-browser)))
+        (when (and b (numberp w) (not (member w seen)))
+          (puthash b (cons w seen) per-browser))))
+    (maphash (lambda (b wins)
+               (when (> (length wins) 1) (push b multi)))
+             per-browser)
+    multi))
+
+(defun browsel-tab-manager--build-entries (tabs show-client show-url multi-win)
   "Return `tabulated-list-entries' rows for TABS.
 SHOW-CLIENT prepends the browser column; SHOW-URL renders the full
 URL (truncated to `browsel-tab-manager-url-column-width') instead of
-just the hostname."
+just the hostname; MULTI-WIN is the list of browser names that
+currently have 2+ distinct windows in the view — their client
+labels get a `:N' per-browser window index appended."
   (mapcar
    (lambda (tab)
      (let* ((flags    (propertize (browsel-tab-manager--flags tab)
@@ -1007,7 +1082,14 @@ just the hostname."
                        'face 'browsel-tab-manager-domain-face))
             (title    (propertize (or (plist-get tab :title) "(no title)")
                                   'face 'browsel-tab-manager-title-face))
-            (client   (propertize (or (plist-get tab :browsel-browser) "?")
+            (browser  (or (plist-get tab :browsel-browser) "?"))
+            (client-label
+             (if (member browser multi-win)
+                 (let ((n (cdr (assoc (cons browser (plist-get tab :windowId))
+                                      browsel-tab-manager--window-numbers))))
+                   (if n (format "%s:%d" browser n) browser))
+               browser))
+            (client   (propertize client-label
                                   'face 'browsel-tab-manager-client-face)))
        (list (browsel-tab-manager--row-id tab)
              (if show-client
@@ -1037,8 +1119,21 @@ toggle)."
          (clients   (delete-dups
                      (mapcar (lambda (tab) (plist-get tab :browsel-browser))
                              sorted)))
-         (show-c    (> (length clients) 1))
+         (show-c    (pcase browsel-tab-manager--client-column-mode
+                      ('on  t)
+                      ('off nil)
+                      (_    (> (length clients) 1))))
+         ;; Automatic per-browser window numbering: for each browser
+         ;; that has 2+ distinct windows in the current view, append
+         ;; `:N' to its client labels.  Single-window browsers stay
+         ;; as plain `chrome' since `chrome:0' would just be noise.
+         ;; This replaces the earlier `W' toggle: the numbers appear
+         ;; exactly when they disambiguate.
+         (multi-window-browsers
+          (browsel-tab-manager--multi-window-browsers sorted))
          (target    (tabulated-list-get-id)))
+    (setq browsel-tab-manager--window-numbers
+          (browsel-tab-manager--compute-window-numbers sorted))
     (setq browsel-tab-manager--tabs
           (mapcar (lambda (tab)
                     (cons (browsel-tab-manager--row-id tab) tab))
@@ -1047,7 +1142,8 @@ toggle)."
           (browsel-tab-manager--format-columns show-c show-url))
     (setq tabulated-list-sort-key nil)  ; we sort ourselves
     (setq tabulated-list-entries
-          (browsel-tab-manager--build-entries sorted show-c show-url))
+          (browsel-tab-manager--build-entries sorted show-c show-url
+                                              multi-window-browsers))
     (tabulated-list-init-header)
     (tabulated-list-print t)
     (when target
@@ -1066,6 +1162,11 @@ toggle)."
            (when show-url
              (concat (propertize "  |  " 'face 'shadow)
                      (propertize "URL view" 'face 'font-lock-keyword-face)))
+           (unless (eq browsel-tab-manager--client-column-mode 'auto)
+             (concat (propertize "  |  Client:" 'face 'shadow)
+                     (propertize
+                      (symbol-name browsel-tab-manager--client-column-mode)
+                      'face 'font-lock-keyword-face)))
            (when filter
              (concat (propertize "  |  Filter: " 'face 'shadow)
                      (propertize (format "/%s/" filter)
@@ -1248,6 +1349,23 @@ displays `URL view' while active."
   (setq browsel-tab-manager--show-url (not browsel-tab-manager--show-url))
   (browsel-tab-manager--refresh))
 
+(defun browsel-tab-manager-cycle-client-column ()
+  "Cycle the Client column visibility through auto → on → off → auto.
+`auto' shows the column when two or more browsers are represented
+in the current view.  `on' forces it visible even for a single
+browser; `off' forces it hidden even when several are connected.
+The header line shows `Client:on' or `Client:off' while overridden."
+  (interactive)
+  (setq browsel-tab-manager--client-column-mode
+        (pcase browsel-tab-manager--client-column-mode
+          ('auto 'on)
+          ('on   'off)
+          ('off  'auto)
+          (_     'auto)))
+  (browsel-tab-manager--refresh)
+  (message "Client column: %s"
+           browsel-tab-manager--client-column-mode))
+
 (defun browsel-tab-manager-copy-url ()
   "Copy the URL of the tab on the current line to the kill ring."
   (interactive)
@@ -1399,6 +1517,7 @@ answering `n' aborts the operation."
     (define-key map (kbd "w")          #'browsel-tab-manager-copy-url)
     (define-key map (kbd "/")          #'browsel-tab-manager-set-filter)
     (define-key map (kbd "v")          #'browsel-tab-manager-toggle-url)
+    (define-key map (kbd "r")          #'browsel-tab-manager-cycle-client-column)
     (define-key map (kbd "= d")        #'browsel-tab-manager-mark-duplicates)
     map)
   "Keymap for `browsel-tab-manager-mode'.
@@ -1412,9 +1531,15 @@ dired-style marking for bookmark and close actions.
 
 Columns:
   Client     the browser that owns the tab (chrome, firefox,
-             or a user-set label like `chrome-work').  Shown only
-             when two or more browsers are represented in the
-             current view; suppressed for single-browser views.
+             or a user-set label like `chrome-work').  Visibility
+             follows `r' — auto by default (shown when two or more
+             browsers are represented), forced on or off by
+             cycling.  When a browser has two or more windows in
+             the current view, each of its rows renders as
+             `CLIENT:N' where N is the per-browser window index —
+             0 for that browser's smallest `windowId', 1 for the
+             next, etc.  Single-window browsers stay as plain
+             `CLIENT' (no `:0' noise).
   Flags      three characters describing tab state; a lowercase
              letter means the flag is set, a space means it is
              not:
@@ -1459,6 +1584,7 @@ Buffer state:
   \\[browsel-tab-manager-cycle-sort]     cycle sort key (mru → title → domain → window)
   \\[browsel-tab-manager-set-filter]     regex filter on title / URL / domain (empty clears)
   \\[browsel-tab-manager-toggle-url]     toggle the location column between hostname and full URL
+  \\[browsel-tab-manager-cycle-client-column]     cycle Client column visibility (auto → on → off)
   \\[browsel-tab-manager-copy-url]     copy the current tab's URL to the kill ring
   q     `quit-window'
 
