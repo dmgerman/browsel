@@ -1100,7 +1100,7 @@ toggle)."
   (tabulated-list-put-tag " " t))
 
 (defun browsel-tab-manager-unmark-all ()
-  "Clear marks from every tab in the buffer."
+  "Unmark every tab in the buffer."
   (interactive)
   (save-excursion
     (goto-char (point-min))
@@ -1108,7 +1108,7 @@ toggle)."
       (tabulated-list-put-tag " " t))))
 
 (defun browsel-tab-manager-toggle-all-marks ()
-  "Toggle marks on every tab: marked rows unmark, unmarked rows mark."
+  "Invert every tab's mark: marked rows become unmarked and vice versa."
   (interactive)
   (save-excursion
     (goto-char (point-min))
