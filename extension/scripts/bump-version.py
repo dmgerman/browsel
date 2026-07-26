@@ -5,11 +5,19 @@
 #
 # Bump the browsel version in browsel.el and config.json in lockstep.
 #
-# CLIENT_HELLO is strict on exact-match between the Emacs-side
-# `browsel-version' constant and the extension's manifest version, so
-# both have to move together.  This script does that from a single
-# command; run it from the repo root or from extension/ — the paths it
-# touches are resolved relative to the script's own location.
+# Three places must move together:
+#   1. `(defconst browsel-version "...")' in browsel.el  — the wire
+#      version enforced by CLIENT_HELLO's strict equality check.
+#   2. `;; Version: ...' in browsel.el's file header      — what MELPA
+#      and package.el read to name the installed package version.
+#   3. `"version": "..."' in extension/config.json        — copied
+#      into every built manifest.json and sent in CLIENT_HELLO.
+#
+# Any one of them drifting from the others causes user-visible
+# breakage (a version-check reject, a stale MELPA display, or a
+# mismatched hello).  This script updates all three from a single
+# command; run it from the repo root or from extension/ — the paths
+# it touches are resolved relative to the script's own location.
 #
 # Usage: scripts/bump-version.py X.Y[.Z]
 
@@ -30,18 +38,36 @@ def main():
     cfg_path = extension_dir / "config.json"
     el_path = repo_root / "browsel.el"
 
-    # Regex-substitute both files in place so unrelated formatting
+    # Regex-substitute each file in place so unrelated formatting
     # (array layout in config.json, blank lines and comments in
-    # browsel.el) is preserved verbatim.
+    # browsel.el) is preserved verbatim.  Each entry names the file
+    # and the pattern; browsel.el has TWO patterns (the file header
+    # and the `browsel-version' defconst) — a match count > 1 means
+    # they must both hit, so a single-shot bump keeps them in sync.
     changed = []
-    for path, pattern in [
-        (el_path, re.compile(r'(\(defconst browsel-version ")[^"]*(")')),
-        (cfg_path, re.compile(r'("version":\s*")[^"]*(")')),
+    for path, patterns in [
+        (el_path, [
+            re.compile(r'(^;; Version: )[^\s]+', re.MULTILINE),
+            re.compile(r'(\(defconst browsel-version ")[^"]*(")'),
+        ]),
+        (cfg_path, [
+            re.compile(r'("version":\s*")[^"]*(")'),
+        ]),
     ]:
         text = path.read_text()
-        if not pattern.search(text):
-            sys.exit(f"version field not found in {path}")
-        new = pattern.sub(rf"\g<1>{version}\g<2>", text, count=1)
+        new = text
+        for pattern in patterns:
+            if not pattern.search(new):
+                sys.exit(f"version field not found in {path} for {pattern.pattern!r}")
+            # Header pattern captures only one group (the prefix);
+            # defconst / json patterns capture two (prefix + suffix
+            # quote).  Build the replacement dynamically so both
+            # shapes work.
+            groups = pattern.groups
+            if groups == 1:
+                new = pattern.sub(rf"\g<1>{version}", new, count=1)
+            else:
+                new = pattern.sub(rf"\g<1>{version}\g<2>", new, count=1)
         if new != text:
             path.write_text(new)
             changed.append(path.name)
