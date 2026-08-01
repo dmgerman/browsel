@@ -631,9 +631,10 @@ The header line shows the current sort key, any active regex
 filter, whether URL view is on, and the tab count.
 
 Columns: an optional Client column, the =[flags]= column, the
-Domain column (or URL when toggled), and Title.  The one-character
-prefix left of the Client column is the mark tag — =D= for close,
-=B= for bookmark.
+=Age= column (relative time since last access; shown by default,
+toggle with =a=), the Domain column (or URL when toggled), and
+Title.  The one-character prefix left of the Client column is
+the mark tag — =D= for close, =B= for bookmark.
 
 Keymap:
 
@@ -650,6 +651,8 @@ Keymap:
 | =B=          | bookmark current tab immediately, prompt for name         |
 | =s=          | cycle sort: =mru= → =title= → =domain= → =window=         |
 | =v=          | toggle location column between hostname and full URL      |
+| =r=          | cycle Client column visibility: =auto= → =on= → =off=     |
+| =a=          | toggle the Age column (relative time since last access)   |
 | =w=          | copy the current tab's URL to the kill ring               |
 | =/=          | regex filter on title / URL / domain (empty clears)       |
 | =/=~= d=     | mark all duplicate tabs for deletion                      |
@@ -998,6 +1001,7 @@ Configuration variables for paths, output locations, and credentials
 | =browsel-tab-manager-domain-column-width= | width of the Domain column                    |
 | =browsel-tab-manager-url-column-width=    | width of the URL column when the manager's URL view (=v=) is on |
 | =browsel-tab-manager-client-column-width= | width of the Client column when 2+ browsers are represented |
+| =browsel-tab-manager-accessed-column-width= | width of the Age column when the manager's Age view (=a=) is on |
 | =browsel-tab-manager-bookmark-function= | function used by the manager's =b= / =B= actions to save a bookmark; default calls =bookmark-store= with a browsel-owned handler that dispatches via =browse-url= |
 
 The full list is in =CONTRIBUTING.org=.

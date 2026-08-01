@@ -137,6 +137,16 @@ used when URL view is off (the default)."
   :type 'integer
   :group 'browsel)
 
+(defcustom browsel-tab-manager-accessed-column-width 5
+  "Width of the Age column in `browsel-tab-manager-mode' when it is on.
+Toggled from the manager buffer with `a'.  The column renders the
+relative time since each tab was last accessed as short tokens
+\(`just', `3m', `23h', `5d', `2w', `12mo', `2y'), every one of
+which fits in five characters.  The header renders as `Age' rather
+than `Accessed' so the label matches the column's narrow width."
+  :type 'integer
+  :group 'browsel)
+
 (defcustom browsel-tab-manager-bookmark-function
   #'browsel-tab-manager-bookmark-default
   "Function called to save a bookmark for a browsel tab.
@@ -981,6 +991,15 @@ Falls back to `browsel-tab-manager-sort' when nil.  Advanced via
   "When non-nil, the buffer shows each tab's full URL instead of just the domain.
 Toggled by `v'.")
 
+(defvar-local browsel-tab-manager--show-accessed t
+  "When non-nil, the buffer shows an Age column of relative last-access times.
+
+Defaults to t so the Age column is visible on first open; toggle
+with `a' to hide.  Rendered values are the short tokens produced
+by `browsel-tab-manager--format-relative-time' (`just', `3h', `2d',
+`12mo', ...).  Sorting by this dimension is already available under
+the `mru' sort key, cycled by `s'.")
+
 (defvar-local browsel-tab-manager--client-column-mode 'auto
   "Visibility mode for the Client column.
 One of the symbols:
@@ -1034,24 +1053,51 @@ closed; the numbering re-derives from the current `windowId' set.")
         (string-match-p regex url)
         (string-match-p regex domain))))
 
-(defun browsel-tab-manager--format-columns (show-client show-url)
+(defun browsel-tab-manager--format-relative-time (ms-timestamp)
+  "Return a short human-readable string for MS-TIMESTAMP relative to now.
+MS-TIMESTAMP is milliseconds since the Unix epoch, as reported by
+the browser extension's `lastAccessed'.  Returns strings like
+`just', `3m', `23h', `5d', `2w', `12mo', `2y' — every possible
+return value fits in five characters, matching
+`browsel-tab-manager-accessed-column-width'.  Returns an empty
+string when MS-TIMESTAMP is nil, zero, or otherwise falsy."
+  (if (or (null ms-timestamp) (not (numberp ms-timestamp)) (zerop ms-timestamp))
+      ""
+    (let ((seconds (- (float-time) (/ ms-timestamp 1000.0))))
+      (cond
+       ((< seconds 60)            "just")
+       ((< seconds 3600)          (format "%dm"  (floor (/ seconds 60))))
+       ((< seconds 86400)         (format "%dh"  (floor (/ seconds 3600))))
+       ((< seconds (* 7 86400))   (format "%dd"  (floor (/ seconds 86400))))
+       ((< seconds (* 30 86400))  (format "%dw"  (floor (/ seconds (* 7 86400)))))
+       ((< seconds (* 365 86400)) (format "%dmo" (floor (/ seconds (* 30 86400)))))
+       (t                         (format "%dy"  (floor (/ seconds (* 365 86400)))))))))
+
+(defun browsel-tab-manager--format-columns (show-client show-url show-accessed)
   "Return the `tabulated-list-format' vector.
 Includes a Client column iff SHOW-CLIENT (two or more connected
 browsers represented in the current view).  When SHOW-URL is
 non-nil, the Domain column becomes a URL column widened to
-`browsel-tab-manager-url-column-width'."
+`browsel-tab-manager-url-column-width'.  When SHOW-ACCESSED is
+non-nil, an Age column is inserted between Flags and the location,
+rendering the relative time since each tab was last accessed."
   (let* ((location-col
           (if show-url
               (list "URL" browsel-tab-manager-url-column-width t)
             (list "Domain" browsel-tab-manager-domain-column-width t)))
-         (rest (vector '("Flags" 5 nil)
-                       location-col
-                       '("Title" 0 t))))
-    (if show-client
-        (apply #'vector
-               (list "Client" browsel-tab-manager-client-column-width t)
-               (append rest nil))
-      rest)))
+         (accessed-col
+          (and show-accessed
+               (list "Age" browsel-tab-manager-accessed-column-width nil)))
+         (middle
+          (append (list '("Flags" 5 nil))
+                  (when accessed-col (list accessed-col))
+                  (list location-col
+                        '("Title" 0 t)))))
+    (apply #'vector
+           (if show-client
+               (cons (list "Client" browsel-tab-manager-client-column-width t)
+                     middle)
+             middle))))
 
 (defun browsel-tab-manager--compute-window-numbers (tabs)
   "Return an alist mapping (BROWSER . WINDOWID) → integer index for TABS.
@@ -1096,11 +1142,13 @@ Single-window browsers stay as plain `chrome' / `firefox'."
              per-browser)
     multi))
 
-(defun browsel-tab-manager--build-entries (tabs show-client show-url multi-win)
+(defun browsel-tab-manager--build-entries (tabs show-client show-url show-accessed multi-win)
   "Return `tabulated-list-entries' rows for TABS.
 SHOW-CLIENT prepends the browser column; SHOW-URL renders the full
 URL (truncated to `browsel-tab-manager-url-column-width') instead of
-just the hostname; MULTI-WIN is the list of browser names that
+just the hostname; SHOW-ACCESSED inserts an Age cell between Flags
+and the location, rendering the relative time since the tab was
+last accessed; MULTI-WIN is the list of browser names that
 currently have 2+ distinct windows in the view — their client
 labels get a `:N' per-browser window index appended."
   (mapcar
@@ -1125,11 +1173,18 @@ labels get a `:N' per-browser window index appended."
                    (if n (format "%s:%d" browser n) browser))
                browser))
             (client   (propertize client-label
-                                  'face 'browsel-tab-manager-client-face)))
+                                  'face 'browsel-tab-manager-client-face))
+            (accessed (and show-accessed
+                           (propertize
+                            (browsel-tab-manager--format-relative-time
+                             (plist-get tab :lastAccessed))
+                            'face 'browsel-tab-manager-domain-face)))
+            (cells    (append (when show-client (list client))
+                              (list flags)
+                              (when accessed  (list accessed))
+                              (list location title))))
        (list (browsel-tab-manager--row-id tab)
-             (if show-client
-                 (vector client flags location title)
-               (vector flags location title)))))
+             (apply #'vector cells))))
    tabs))
 
 (defun browsel-tab-manager--refresh (&rest _)
@@ -1142,6 +1197,7 @@ toggle)."
   (let* ((raw       (browsel-browser-tabs))
          (filter    browsel-tab-manager--filter)
          (show-url  browsel-tab-manager--show-url)
+         (show-acc  browsel-tab-manager--show-accessed)
          (kept      (if filter
                         (seq-filter (lambda (tab)
                                       (browsel-tab-manager--tab-matches-filter-p
@@ -1182,10 +1238,10 @@ toggle)."
     ;; text.  The reapply also GCs the hash: entries whose row-id is
     ;; no longer in the view (tab closed, filtered out) get dropped.
     (setq tabulated-list-format
-          (browsel-tab-manager--format-columns show-c show-url))
+          (browsel-tab-manager--format-columns show-c show-url show-acc))
     (setq tabulated-list-sort-key nil)  ; we sort ourselves
     (setq tabulated-list-entries
-          (browsel-tab-manager--build-entries sorted show-c show-url
+          (browsel-tab-manager--build-entries sorted show-c show-url show-acc
                                               multi-window-browsers))
     (tabulated-list-init-header)
     (tabulated-list-print t)
@@ -1505,6 +1561,18 @@ displays `URL view' while active."
   (setq browsel-tab-manager--show-url (not browsel-tab-manager--show-url))
   (browsel-tab-manager--refresh))
 
+(defun browsel-tab-manager-toggle-accessed ()
+  "Toggle the Age column showing each tab's relative last-access time.
+When on, an `Age' column between Flags and the location renders short
+tokens like `just', `3h', `2d', `12mo' derived from the browser-
+reported `lastAccessed' timestamp.  Sorting by this dimension is
+already available under the `mru' sort key (cycled by `s'); this
+command only controls whether the value is displayed."
+  (interactive)
+  (setq browsel-tab-manager--show-accessed
+        (not browsel-tab-manager--show-accessed))
+  (browsel-tab-manager--refresh))
+
 (defun browsel-tab-manager-cycle-client-column ()
   "Cycle the Client column visibility through auto → on → off → auto.
 `auto' shows the column when two or more browsers are represented
@@ -1668,6 +1736,7 @@ answering `n' aborts the operation."
     (define-key map (kbd "/")          #'browsel-tab-manager-set-filter)
     (define-key map (kbd "v")          #'browsel-tab-manager-toggle-url)
     (define-key map (kbd "r")          #'browsel-tab-manager-cycle-client-column)
+    (define-key map (kbd "a")          #'browsel-tab-manager-toggle-accessed)
     (define-key map (kbd "= d")        #'browsel-tab-manager-mark-duplicates)
     map)
   "Keymap for `browsel-tab-manager-mode'.
@@ -1701,6 +1770,11 @@ Columns:
              URL view is toggled on (`v'), the column becomes
              `URL' and shows the full URL truncated to
              `browsel-tab-manager-url-column-width'.
+  Age        the relative time since the tab was last accessed,
+             rendered as a short token: `just', `3m', `23h', `5d',
+             `2w', `12mo', `2y'.  Shown by default; toggle with
+             `a'.  Sorting by this dimension is available under
+             the `mru' sort key.
   Title      the tab's title as reported by the browser.
 
 The header line above the table shows the current sort key, the
@@ -1735,6 +1809,7 @@ Buffer state:
   \\[browsel-tab-manager-set-filter]     regex filter on title / URL / domain (empty clears)
   \\[browsel-tab-manager-toggle-url]     toggle the location column between hostname and full URL
   \\[browsel-tab-manager-cycle-client-column]     cycle Client column visibility (auto → on → off)
+  \\[browsel-tab-manager-toggle-accessed]     toggle the Age column (relative time since last access)
   \\[browsel-tab-manager-copy-url]     copy the current tab's URL to the kill ring
   q     `quit-window'
 
