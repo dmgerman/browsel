@@ -914,6 +914,7 @@ the rest of =browsel= keeps working without it.
 | =SAVE_PAGE= / =CHATGPT=            | =pandoc= on =$PATH=               | Errors at save time; the right-click action fails          |
 | =YOUTUBE_TRANSCRIPT=               | =yt-dlp= on =$PATH=               | Errors at fetch time                                        |
 | Rich =YOUTUBE= metadata            | YouTube Data API v3 key           | Capture still works, but without title/duration/description |
+| Live-hover actions in =browsel-tab-jump= | =vertico= completion frontend | Actions target the accepted candidate rather than the row currently highlighted |
 | Optional Emacs-side modules        | corresponding =(require …)= in the use-package =:config= | Their handlers aren't registered; that name returns "Unknown request" |
 
 If you don't load a module (e.g. don't =(require 'browsel-youtube)=),
