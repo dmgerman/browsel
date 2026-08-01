@@ -35,8 +35,13 @@ ELPA_DIR = .elpa
 
 # Dependencies installed into the project-local ELPA before lint/compile.
 # `websocket' is the runtime dependency declared in browsel.el's
-# Package-Requires; `package-lint' is the lint tool itself.
-DEPS = websocket package-lint vertico
+# Package-Requires; `package-lint' is the lint tool itself.  Vertico is
+# a *soft* runtime dependency of browsel-tab-manager.el — the anchor-
+# restore path prefers vertico's internals when they are available and
+# degrades gracefully otherwise — so it is NOT installed here.  Byte-
+# compile stays warning-free via the `declare-function' / `defvar'
+# stubs at the top of that file.
+DEPS = websocket package-lint
 
 # Common Emacs invocation header: project-local package-user-dir, MELPA in
 # package-archives, package-initialize so installed packages are on load-path.

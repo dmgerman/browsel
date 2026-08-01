@@ -95,10 +95,21 @@
 ;; at compile time.
 (defvar consult--narrow)
 
-;; Vertico is a hard dependency: the anchor-restore path (M-k) reads
-;; `vertico--index' and `vertico--candidates' directly, so those
-;; symbols must be resolvable at both compile and run time.
-(require 'vertico)
+;; Vertico is a SOFT dependency.  The anchor-restore path (M-k in
+;; the jumper) reads `vertico--index' and `vertico--candidates'
+;; directly to keep the highlight on the row above a just-closed
+;; tab; without vertico, those reads short-circuit via the
+;; `bound-and-true-p' / `fboundp' guards at the call sites, and the
+;; highlight simply lands at the top of the list.  Every other
+;; feature works with any completion frontend.  The stubs below
+;; keep byte-compile quiet when vertico is not installed at compile
+;; time.
+(require 'vertico nil t)
+(declare-function vertico--candidate "ext:vertico" ())
+(declare-function vertico--goto      "ext:vertico" (index))
+(defvar vertico--input)
+(defvar vertico--index)
+(defvar vertico--candidates)
 
 ;; ── Configuration ────────────────────────────────────────────────────────────
 
