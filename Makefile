@@ -13,6 +13,9 @@
 #                         (delegates to extension/Makefile's default target)
 #   make clean          — remove every *.elc file
 #   make check          — compile + lint + checkdoc + check-declare
+#   make check-ci       — same as `make check' but under $(CI_EMACS)
+#                         (defaults to emacs-plus@30, matching the
+#                         GitHub Actions matrix; run before pushing)
 #   make all            — check + extension
 #
 # Override the Emacs binary by passing EMACS=path/to/emacs.
@@ -51,7 +54,7 @@ EMACS_BATCH = $(EMACS) -Q --batch \
   --eval "(add-to-list 'package-archives '(\"melpa\" . \"https://melpa.org/packages/\"))" \
   --eval "(package-initialize)"
 
-.PHONY: default lint checkdoc check-declare compile clean check extension all
+.PHONY: default lint checkdoc check-declare compile clean check check-ci extension all
 
 # Default target: byte-compile the elisp and rebuild the WebExtension
 # bundles.  Lint is not included here so the common edit-then-`make' loop
@@ -136,5 +139,23 @@ extension:
 	$(MAKE) -C extension
 
 check: compile lint checkdoc check-declare
+
+# CI-mirror check: force the same Emacs version the GitHub Actions
+# matrix pins.  The default `make check' runs under whatever `emacs'
+# resolves to on the developer's PATH, which is typically the
+# latest release and has looser checkdoc / package-lint rules than
+# the version CI uses; that lets docstring drift slip through to a
+# CI failure.  Set CI_EMACS below to the absolute path of the
+# CI-matching binary and use `make check-ci' before pushing.
+CI_EMACS ?= /opt/homebrew/opt/emacs-plus@30/bin/emacs
+
+check-ci:
+	@if [ ! -x "$(CI_EMACS)" ]; then \
+	  echo "CI_EMACS not executable: $(CI_EMACS)"; \
+	  echo "Install with: brew install emacs-plus@30"; \
+	  echo "Or override: make check-ci CI_EMACS=/path/to/emacs"; \
+	  exit 1; \
+	fi
+	$(MAKE) EMACS=$(CI_EMACS) check
 
 all: check extension

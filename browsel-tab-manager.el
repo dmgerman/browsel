@@ -1149,14 +1149,24 @@ toggle)."
           (mapcar (lambda (tab)
                     (cons (browsel-tab-manager--row-id tab) tab))
                   sorted))
-    (setq tabulated-list-format
-          (browsel-tab-manager--format-columns show-c show-url))
-    (setq tabulated-list-sort-key nil)  ; we sort ourselves
-    (setq tabulated-list-entries
-          (browsel-tab-manager--build-entries sorted show-c show-url
-                                              multi-window-browsers))
-    (tabulated-list-init-header)
-    (tabulated-list-print t)
+    ;; Capture marks BEFORE regenerating the buffer.  Mark tags live
+    ;; in `tabulated-list-padding' and are written directly into the
+    ;; buffer text by `tabulated-list-put-tag'; `tabulated-list-print'
+    ;; rebuilds every row from `tabulated-list-entries' and wipes the
+    ;; padding, so a sort / filter / URL toggle would otherwise drop
+    ;; every mark.  Marks are keyed by row-id; a marked tab that has
+    ;; been closed externally simply won't reappear in the new entries
+    ;; and its mark is dropped, which is the intended behaviour.
+    (let ((preserved-marks (browsel-tab-manager--marked-actions)))
+      (setq tabulated-list-format
+            (browsel-tab-manager--format-columns show-c show-url))
+      (setq tabulated-list-sort-key nil)  ; we sort ourselves
+      (setq tabulated-list-entries
+            (browsel-tab-manager--build-entries sorted show-c show-url
+                                                multi-window-browsers))
+      (tabulated-list-init-header)
+      (tabulated-list-print t)
+      (browsel-tab-manager--reapply-marks preserved-marks))
     (when target
       (goto-char (point-min))
       (while (and (not (eobp))
@@ -1242,6 +1252,27 @@ executes top-to-bottom."
                 ((eq c ?B) (push (cons (tabulated-list-get-id) 'bookmark) marked))))
         (forward-line 1)))
     (nreverse marked)))
+
+(defun browsel-tab-manager--reapply-marks (marks)
+  "Reinstate tags in the just-refreshed buffer.
+MARKS is an alist of (row-id . tag) as returned by
+`browsel-tab-manager--marked-actions'.  Only tags whose row-id is
+still present in `tabulated-list-entries' are restored; a marked
+tab that was closed externally simply won't reappear and its tag
+is silently dropped.  Called by `--refresh' after
+`tabulated-list-print' has rebuilt the row text (which clears the
+padding area where mark tags live)."
+  (when marks
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (let* ((id  (tabulated-list-get-id))
+               (tag (cdr (assoc id marks))))
+          (when tag
+            (tabulated-list-put-tag
+             (pcase tag ('delete "D") ('bookmark "B") (_ " "))
+             nil)))
+        (forward-line 1)))))
 
 (defun browsel-tab-manager-execute ()
   "Execute every mark: bookmark `B'-marked tabs, close `D'-marked tabs.

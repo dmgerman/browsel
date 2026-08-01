@@ -377,7 +377,13 @@ declared a label.  No-op when INSTANCE is not present."
 
 ;;;###autoload
 (defun browsel-start ()
-  "Start the Chrome server WebSocket server on `browsel-port'."
+  "Start the browsel WebSocket server on `browsel-port'.
+A failure to bind the port (another Emacs already holds it,
+permission denied, etc.) is downgraded to a warning: the server
+stays disabled and `browsel--server-process' remains nil rather
+than propagating an error to the caller.  This keeps a broken
+port from crashing an init.el `browsel-start' call — the user can
+fix the underlying condition and re-invoke."
   (interactive)
   (when (and browsel--server-process
              (not (eq (process-status browsel--server-process) 'closed)))
@@ -387,16 +393,26 @@ declared a label.  No-op when INSTANCE is not present."
         browsel--connect-counter 0
         browsel--pending-callbacks nil
         browsel--name-registry (browsel--load-name-registry)
-        browsel--server-process
-        (websocket-server
-         browsel-port
-         :host browsel-host
-         :on-open    #'browsel--on-open
-         :on-close   #'browsel--on-close
-         :on-message #'browsel--on-message
-         :on-error   #'browsel--on-error))
-  (browsel--log "[SERVER] started on port %d" browsel-port)
-  (message "Chrome server (WS) started on port %d" browsel-port))
+        browsel--server-process nil)
+  (condition-case err
+      (progn
+        (setq browsel--server-process
+              (websocket-server
+               browsel-port
+               :host browsel-host
+               :on-open    #'browsel--on-open
+               :on-close   #'browsel--on-close
+               :on-message #'browsel--on-message
+               :on-error   #'browsel--on-error))
+        (browsel--log "[SERVER] started on port %d" browsel-port)
+        (message "browsel WebSocket server started on port %d" browsel-port))
+    (error
+     (setq browsel--server-process nil)
+     (browsel--warn
+      "could not bind port %d: %s. \
+Server is disabled; fix the condition (typically another Emacs \
+holding the port) and re-run `M-x browsel-start'."
+      browsel-port (error-message-string err)))))
 
 ;;;###autoload
 (defun browsel-stop ()
