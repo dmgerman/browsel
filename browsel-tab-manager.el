@@ -991,6 +991,30 @@ One of the symbols:
   `off'   — never show, even when multiple browsers are connected.
 Cycled by `r' in the manager buffer.")
 
+(defvar-local browsel-tab-manager--marks nil
+  "Buffer-local hash-table of row-id → mark tag symbol.
+
+Keys are the row-ids used by `tabulated-list-get-id' (each key
+is a cons of the browser's instance UUID and the tab id).
+Values are `delete' for `D'-tagged rows and
+`bookmark' for `B'-tagged rows.  The hash is the single source of
+truth for mark state; `tabulated-list-put-tag' writes to the
+buffer padding only for visual feedback, and every `--refresh'
+call reapplies from this hash after `tabulated-list-print' wipes
+the padding.
+
+Initialised by `browsel-tab-manager-mode' since
+`define-derived-mode' calls `kill-all-local-variables' which
+resets `defvar-local' defaults to nil.")
+
+(defun browsel-tab-manager--marks-hash ()
+  "Return the mark table, initialising it if the mode setup missed it.
+Defensive fallback for cases where the mode function did not run
+\(e.g. a caller manually poking mark commands into a buffer whose
+major-mode is not `browsel-tab-manager-mode')."
+  (or browsel-tab-manager--marks
+      (setq browsel-tab-manager--marks (make-hash-table :test #'equal))))
+
 (defvar-local browsel-tab-manager--window-numbers nil
   "Alist mapping (browser . windowId) → integer per-browser window index.
 Recomputed by every `--refresh'.  A window's index is stable within a
@@ -1149,24 +1173,23 @@ toggle)."
           (mapcar (lambda (tab)
                     (cons (browsel-tab-manager--row-id tab) tab))
                   sorted))
-    ;; Capture marks BEFORE regenerating the buffer.  Mark tags live
-    ;; in `tabulated-list-padding' and are written directly into the
-    ;; buffer text by `tabulated-list-put-tag'; `tabulated-list-print'
-    ;; rebuilds every row from `tabulated-list-entries' and wipes the
-    ;; padding, so a sort / filter / URL toggle would otherwise drop
-    ;; every mark.  Marks are keyed by row-id; a marked tab that has
-    ;; been closed externally simply won't reappear in the new entries
-    ;; and its mark is dropped, which is the intended behaviour.
-    (let ((preserved-marks (browsel-tab-manager--marked-actions)))
-      (setq tabulated-list-format
-            (browsel-tab-manager--format-columns show-c show-url))
-      (setq tabulated-list-sort-key nil)  ; we sort ourselves
-      (setq tabulated-list-entries
-            (browsel-tab-manager--build-entries sorted show-c show-url
-                                                multi-window-browsers))
-      (tabulated-list-init-header)
-      (tabulated-list-print t)
-      (browsel-tab-manager--reapply-marks preserved-marks))
+    ;; Marks live in the buffer-local `browsel-tab-manager--marks'
+    ;; hash and are re-rendered from there after every
+    ;; `tabulated-list-print' (which wipes the padding).  That
+    ;; covers sort / filter / URL toggles AND any other caller of
+    ;; `tabulated-list-print' — the built-in `S' key, column-header
+    ;; click, any advice, etc. — because the hash outlives the row
+    ;; text.  The reapply also GCs the hash: entries whose row-id is
+    ;; no longer in the view (tab closed, filtered out) get dropped.
+    (setq tabulated-list-format
+          (browsel-tab-manager--format-columns show-c show-url))
+    (setq tabulated-list-sort-key nil)  ; we sort ourselves
+    (setq tabulated-list-entries
+          (browsel-tab-manager--build-entries sorted show-c show-url
+                                              multi-window-browsers))
+    (tabulated-list-init-header)
+    (tabulated-list-print t)
+    (browsel-tab-manager--reapply-marks-from-hash)
     (when target
       (goto-char (point-min))
       (while (and (not (eobp))
@@ -1209,21 +1232,56 @@ toggle)."
   "Return the tab plist for the row point is on, or nil."
   (cdr (assoc (tabulated-list-get-id) browsel-tab-manager--tabs)))
 
-;; ── Actions ────────────────────────────────────────────────────────────────
+;; ── Marks: single source of truth in `browsel-tab-manager--marks'  ────────
+;;
+;; Every mark-mutating command updates the hash-table and also writes
+;; the visual tag via `tabulated-list-put-tag'.  Every refresh reapplies
+;; the tag from the hash after `tabulated-list-print' has wiped the
+;; padding area — so a sort cycle (`s'), URL toggle (`v'), filter change
+;; (`/'), or ANY other caller of `tabulated-list-print' (built-in `S',
+;; column-header click, external code) leaves marks intact.  The hash
+;; is GC'd on every refresh: keys not present in the new entries are
+;; dropped, so a marked tab that was closed externally is forgotten.
+;;
+;; Tag characters in the hash are the symbols `delete' / `bookmark';
+;; string tags "D" / "B" only live in the buffer padding.
+
+(defun browsel-tab-manager--tag-char (tag)
+  "Return the one-character string used to display TAG in the padding."
+  (pcase tag ('delete "D") ('bookmark "B") (_ " ")))
+
+(defun browsel-tab-manager--set-mark-at-point (tag)
+  "Set the mark on the current line to TAG (or nil to clear), advance.
+Updates the hash and writes the padding character in one step."
+  (let ((id (tabulated-list-get-id)))
+    (when id
+      (if tag
+          (puthash id tag (browsel-tab-manager--marks-hash))
+        (remhash id (browsel-tab-manager--marks-hash)))
+      (tabulated-list-put-tag (browsel-tab-manager--tag-char tag) t))))
 
 (defun browsel-tab-manager-mark-delete (&optional _arg)
   "Mark the tab on the current line for deletion and advance one line."
   (interactive "p")
-  (tabulated-list-put-tag "D" t))
+  (browsel-tab-manager--set-mark-at-point 'delete))
+
+(defun browsel-tab-manager-mark-bookmark (&optional _arg)
+  "Mark the tab on the current line for bookmarking and advance one line.
+Executed by `x' using the tab's title as the bookmark name; use
+`B' to bookmark immediately with a prompt.  A prior `D' mark on
+this row is overwritten (dired: one mark per row)."
+  (interactive "p")
+  (browsel-tab-manager--set-mark-at-point 'bookmark))
 
 (defun browsel-tab-manager-unmark (&optional _arg)
   "Clear the mark on the tab on the current line and advance one line."
   (interactive "p")
-  (tabulated-list-put-tag " " t))
+  (browsel-tab-manager--set-mark-at-point nil))
 
 (defun browsel-tab-manager-unmark-all ()
   "Unmark every tab in the buffer."
   (interactive)
+  (clrhash (browsel-tab-manager--marks-hash))
   (save-excursion
     (goto-char (point-min))
     (while (not (eobp))
@@ -1232,47 +1290,73 @@ toggle)."
 (defun browsel-tab-manager-toggle-all-marks ()
   "Invert every tab's mark: marked rows become unmarked and vice versa."
   (interactive)
-  (save-excursion
-    (goto-char (point-min))
-    (while (not (eobp))
-      (let ((char (char-after (line-beginning-position))))
-        (tabulated-list-put-tag (if (eq char ?D) " " "D") t)))))
-
-(defun browsel-tab-manager--marked-actions ()
-  "Return an alist of (row-id . tag) for every currently-marked row.
-TAG is `delete' for `D'-tagged rows and `bookmark' for `B'-tagged
-rows.  Rows in the order they appear in the buffer, so `x'
-executes top-to-bottom."
-  (let (marked)
-    (save-excursion
-      (goto-char (point-min))
-      (while (not (eobp))
-        (let ((c (char-after (line-beginning-position))))
-          (cond ((eq c ?D) (push (cons (tabulated-list-get-id) 'delete)   marked))
-                ((eq c ?B) (push (cons (tabulated-list-get-id) 'bookmark) marked))))
-        (forward-line 1)))
-    (nreverse marked)))
-
-(defun browsel-tab-manager--reapply-marks (marks)
-  "Reinstate tags in the just-refreshed buffer.
-MARKS is an alist of (row-id . tag) as returned by
-`browsel-tab-manager--marked-actions'.  Only tags whose row-id is
-still present in `tabulated-list-entries' are restored; a marked
-tab that was closed externally simply won't reappear and its tag
-is silently dropped.  Called by `--refresh' after
-`tabulated-list-print' has rebuilt the row text (which clears the
-padding area where mark tags live)."
-  (when marks
+  (let ((hash (browsel-tab-manager--marks-hash)))
     (save-excursion
       (goto-char (point-min))
       (while (not (eobp))
         (let* ((id  (tabulated-list-get-id))
-               (tag (cdr (assoc id marks))))
-          (when tag
-            (tabulated-list-put-tag
-             (pcase tag ('delete "D") ('bookmark "B") (_ " "))
-             nil)))
-        (forward-line 1)))))
+               (was (gethash id hash))
+               (new (if was nil 'delete)))
+          (if new
+              (puthash id new hash)
+            (remhash id hash))
+          (tabulated-list-put-tag (browsel-tab-manager--tag-char new) t))))))
+
+(defun browsel-tab-manager--marked-actions ()
+  "Return an alist of (row-id . tag) for every currently-marked row.
+Reads from the hash, filtering to ids still present in
+`tabulated-list-entries' (so a mark whose tab was dropped from
+the view — closed, filtered out — is silently skipped).  Rows in
+the buffer order for stable top-to-bottom `x' execution."
+  (let ((hash browsel-tab-manager--marks)
+        marked)
+    (when hash
+      (save-excursion
+        (goto-char (point-min))
+        (while (not (eobp))
+          (let* ((id  (tabulated-list-get-id))
+                 (tag (and id (gethash id hash))))
+            (when tag (push (cons id tag) marked)))
+          (forward-line 1))))
+    (nreverse marked)))
+
+(defun browsel-tab-manager--reapply-marks-from-hash ()
+  "Re-render the padding tag on every row from the mark table.
+Also GCs the hash: any id in the hash whose row is no longer in
+the current entries is dropped.  Called by `--refresh' after
+`tabulated-list-print' clears the padding."
+  (let ((hash browsel-tab-manager--marks))
+    (unless hash
+      (setq browsel-tab-manager--marks (make-hash-table :test #'equal)
+            hash browsel-tab-manager--marks))
+    (let (seen)
+      (save-excursion
+        (goto-char (point-min))
+        (while (not (eobp))
+          (let* ((id  (tabulated-list-get-id))
+                 (tag (and id (gethash id hash))))
+            (when id (push id seen))
+            (when tag
+              (tabulated-list-put-tag (browsel-tab-manager--tag-char tag)
+                                      nil)))
+          (forward-line 1)))
+      ;; Drop stale hash entries.  Iterating with a snapshot of keys
+      ;; keeps `remhash' from disturbing the traversal.
+      (let (stale)
+        (maphash (lambda (k _v) (unless (member k seen) (push k stale))) hash)
+        (dolist (k stale) (remhash k hash))))))
+
+(defun browsel-tab-manager--response-ok-p (response)
+  "Return non-nil when RESPONSE (from `browsel-request') indicates success.
+A missing or nil `:status' also counts as success — some handlers
+still return an empty payload on success."
+  (let ((status (and (listp response) (plist-get response :status))))
+    (or (null status) (equal status "ok"))))
+
+(defun browsel-tab-manager--response-message (response)
+  "Extract the :message field from RESPONSE, or a placeholder."
+  (or (and (listp response) (plist-get response :message))
+      "unknown reason"))
 
 (defun browsel-tab-manager-execute ()
   "Execute every mark: bookmark `B'-marked tabs, close `D'-marked tabs.
@@ -1280,7 +1364,12 @@ Bookmarks fire first so a bookmark-then-close pair still records
 the URL before it becomes unreachable.  Bookmark names are the
 tab's title; collisions get a `<N>' suffix so no existing bookmark
 is silently overwritten.  Honours `browsel-tab-manager-confirm-close'
-for the count prompt when any `D' marks are present."
+for the count prompt when any `D' marks are present.
+
+A close request whose target tab was already gone (closed
+externally between the last refresh and now) is reported as a
+`gone' count rather than a hard failure — the row will simply
+disappear on the follow-up refresh."
   (interactive)
   (let* ((marked    (browsel-tab-manager--marked-actions))
          (deletes   (seq-filter (lambda (m) (eq (cdr m) 'delete))   marked))
@@ -1299,7 +1388,7 @@ for the count prompt when any `D' marks are present."
                            nd (if (= nd 1) "" "s"))))))
       (message "browsel-tab-manager: cancelled"))
      (t
-      (let ((booked 0) (closed 0))
+      (let ((booked 0) (closed 0) (gone 0))
         (dolist (m bookmarks)
           (let ((tab (cdr (assoc (car m) browsel-tab-manager--tabs))))
             (when tab
@@ -1316,18 +1405,28 @@ for the count prompt when any `D' marks are present."
           (let ((tab (cdr (assoc (car m) browsel-tab-manager--tabs))))
             (when tab
               (condition-case err
-                  (progn (browsel-close-tab tab)
-                         (setq closed (1+ closed)))
+                  (let ((response (browsel-close-tab tab)))
+                    (if (browsel-tab-manager--response-ok-p response)
+                        (setq closed (1+ closed))
+                      (setq gone (1+ gone))))
                 (error
                  (message "Could not close %s: %s"
                           (plist-get tab :title)
                           (error-message-string err)))))))
-        (message "browsel-tab-manager: bookmarked %d/%d, closed %d/%d"
-                 booked nb closed nd)
+        (message
+         (if (zerop gone)
+             (format "browsel-tab-manager: bookmarked %d/%d, closed %d/%d"
+                     booked nb closed nd)
+           (format "browsel-tab-manager: bookmarked %d/%d, closed %d/%d \
+(%d already gone)"
+                   booked nb closed nd gone)))
         (browsel-tab-manager--refresh))))))
 
 (defun browsel-tab-manager-delete-immediate ()
-  "Close the tab on the current line immediately, no mark, no confirmation."
+  "Close the tab on the current line immediately, no mark, no confirmation.
+When the browser reports the tab no longer exists (closed
+externally between refresh and now), messages `already gone' and
+refreshes the buffer so the stale row disappears — no error."
   (interactive)
   (let ((tab (browsel-tab-manager--tab-at-point)))
     (cond
@@ -1335,10 +1434,13 @@ for the count prompt when any `D' marks are present."
       (message "No tab on this line"))
      (t
       (condition-case err
-          (progn
-            (browsel-close-tab tab)
+          (let ((response (browsel-close-tab tab)))
             (browsel-tab-manager--refresh)
-            (message "Closed %s" (plist-get tab :title)))
+            (if (browsel-tab-manager--response-ok-p response)
+                (message "Closed %s" (plist-get tab :title))
+              (message "Tab %S already gone (%s)"
+                       (plist-get tab :title)
+                       (browsel-tab-manager--response-message response))))
         (error
          (message "Could not close %s: %s"
                   (plist-get tab :title)
@@ -1347,31 +1449,43 @@ for the count prompt when any `D' marks are present."
 (defun browsel-tab-manager-visit-tab ()
   "Focus the tab on the current line, raising its browser window.
 Stays in the manager buffer.  Compare `browsel-tab-manager-preview-tab',
-which does not raise the browser window."
+which does not raise the browser window.  When the browser
+reports the tab no longer exists (closed externally between
+refresh and now), messages `already gone' and refreshes so the
+stale row disappears."
   (interactive)
-  (let ((tab (browsel-tab-manager--tab-at-point)))
-    (if (null tab)
-        (message "No tab on this line")
-      (condition-case err
-          (browsel-focus-tab tab t)
-        (error
-         (message "Could not focus %s: %s"
-                  (plist-get tab :title)
-                  (error-message-string err)))))))
+  (browsel-tab-manager--visit-or-preview t))
 
 (defun browsel-tab-manager-preview-tab ()
   "Show the tab on the current line in its browser without raising the window.
-Stays in the manager buffer with Emacs still focused."
+Stays in the manager buffer with Emacs still focused.  Same
+stale-tab handling as `browsel-tab-manager-visit-tab'."
   (interactive)
+  (browsel-tab-manager--visit-or-preview nil))
+
+(defun browsel-tab-manager--visit-or-preview (focus-window)
+  "Focus the current row's tab; raise its window when FOCUS-WINDOW is non-nil.
+Shared implementation for `browsel-tab-manager-visit-tab' (t) and
+`browsel-tab-manager-preview-tab' (nil).  Detects a stale tab id
+via the response `:status', messages `already gone', and refreshes
+so the stale row is dropped."
   (let ((tab (browsel-tab-manager--tab-at-point)))
-    (if (null tab)
-        (message "No tab on this line")
+    (cond
+     ((null tab)
+      (message "No tab on this line"))
+     (t
       (condition-case err
-          (browsel-focus-tab tab nil)
+          (let ((response (browsel-focus-tab tab focus-window)))
+            (unless (browsel-tab-manager--response-ok-p response)
+              (message "Tab %S already gone (%s)"
+                       (plist-get tab :title)
+                       (browsel-tab-manager--response-message response))
+              (browsel-tab-manager--refresh)))
         (error
-         (message "Could not preview %s: %s"
+         (message "Could not %s %s: %s"
+                  (if focus-window "focus" "preview")
                   (plist-get tab :title)
-                  (error-message-string err)))))))
+                  (error-message-string err))))))))
 
 (defun browsel-tab-manager-cycle-sort ()
   "Cycle the sort key through mru → title → domain → window → mru."
@@ -1443,7 +1557,9 @@ computed within each browser separately."
   (interactive)
   (let* ((tabs       (mapcar #'cdr browsel-tab-manager--tabs))
          (victims    (browsel-tab-manager--duplicate-victims tabs))
-         (victim-ids (mapcar #'browsel-tab-manager--row-id victims)))
+         (victim-ids (mapcar #'browsel-tab-manager--row-id victims))
+         (hash       (browsel-tab-manager--marks-hash)))
+    (dolist (id victim-ids) (puthash id 'delete hash))
     (save-excursion
       (goto-char (point-min))
       (while (not (eobp))
@@ -1499,14 +1615,6 @@ the user directly and does not go through this helper."
              for candidate = (format "%s<%d>" name n)
              unless (bookmark-get-bookmark candidate t)
              return candidate)))
-
-(defun browsel-tab-manager-mark-bookmark (&optional _arg)
-  "Mark the tab on the current line for bookmarking and advance one line.
-Executed by `x' using the tab's title as the bookmark name; use
-`B' to bookmark immediately with a prompt.  A prior `D' mark on
-this row is overwritten (dired: one mark per row)."
-  (interactive "p")
-  (tabulated-list-put-tag "B" t))
 
 (defun browsel-tab-manager-bookmark-immediate ()
   "Bookmark the tab on the current line immediately, prompting for the name.
@@ -1634,7 +1742,11 @@ Row id is (INSTANCE . TAB-ID); the same tab keeps its point
 position across refreshes even when the surrounding list has
 changed."
   (setq tabulated-list-padding 2)
-  (setq revert-buffer-function #'browsel-tab-manager--refresh))
+  (setq revert-buffer-function #'browsel-tab-manager--refresh)
+  ;; `define-derived-mode' kills all buffer-locals; initialise the
+  ;; marks hash here so it exists before any mark command runs.
+  (setq-local browsel-tab-manager--marks
+              (make-hash-table :test #'equal)))
 
 ;;;###autoload
 (defun browsel-tab-manager ()

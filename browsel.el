@@ -729,7 +729,14 @@ via `browsel-activate-client' for browsers listed in
 `browsel-clients-needing-activation'.
 
 Signals `user-error' when TAB lacks either required key, or when
-its owning browser is not currently connected.  Returns nil."
+its owning browser is not currently connected.
+
+Returns the browser-side response payload plist: `(:status \"ok\")'
+on success, `(:status \"error\" :message MSG)' when the browser
+rejected the request (typically because the tab id no longer
+exists — the tab was closed between fetch and focus).  Callers
+that want to react to \"tab is gone\" should check
+`(plist-get response :status)'."
   (let ((id      (plist-get tab :id))
         (browser (plist-get tab :browsel-browser)))
     (unless (numberp id)
@@ -742,14 +749,16 @@ its owning browser is not currently connected.  Returns nil."
        browser
        (let ((all (browsel-connected-clients)))
          (if all (mapconcat #'identity all ", ") "none"))))
-    (browsel-request "FOCUS_TAB"
-                     (if focus-window
-                         `(:id ,id :focusWindow t)
-                       `(:id ,id))
-                     browser)
-    (when focus-window
-      (browsel-activate-client browser))
-    nil))
+    (let ((response
+           (browsel-request "FOCUS_TAB"
+                            (if focus-window
+                                `(:id ,id :focusWindow t)
+                              `(:id ,id))
+                            browser)))
+      (when (and focus-window
+                 (equal (plist-get response :status) "ok"))
+        (browsel-activate-client browser))
+      response)))
 
 (defun browsel-close-tab (tab)
   "Close TAB in the browser that owns it.
@@ -758,7 +767,14 @@ carry both `:id' (the browser's numeric tab id) and
 `:browsel-browser' (the owning browser's name).
 
 Signals `user-error' when TAB lacks either required key, or when
-its owning browser is not currently connected.  Returns nil.
+its owning browser is not currently connected.
+
+Returns the browser-side response payload plist: `(:status \"ok\")'
+on success, `(:status \"error\" :message MSG)' when the browser
+rejected the request (typically because the tab id no longer
+exists — the tab was closed between fetch and close).  Callers
+that want to distinguish \"closed by us\" from \"already gone\"
+should check `(plist-get response :status)'.
 
 Note: `chrome.tabs.remove' bypasses any in-page `beforeunload'
 prompt — those only fire from user-initiated UI closes — so
@@ -776,8 +792,7 @@ behaves the same way."
        browser
        (let ((all (browsel-connected-clients)))
          (if all (mapconcat #'identity all ", ") "none"))))
-    (browsel-request "CLOSE_TAB" `(:id ,id) browser)
-    nil))
+    (browsel-request "CLOSE_TAB" `(:id ,id) browser)))
 
 (defun browsel--broadcast (data &optional client)
   "JSON-encode DATA and send it to one connected client.
