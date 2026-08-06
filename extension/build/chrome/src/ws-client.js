@@ -233,10 +233,17 @@ export function startWebSocketClient(options) {
 
     if (msg.name) {
       // Emacs is asking us for something.
+      //
+      // `onIncomingRequest' may return either a plain payload or a
+      // { payload, __timing } envelope.  The envelope form lets a
+      // target (currently Chrome) attach diagnostic timing to the wire
+      // frame without polluting the payload shape — payloads may be
+      // arrays or scalars where object-spreading `__timing' inside
+      // would corrupt the value.  See ai/slow-random-response-time.md.
       Promise.resolve()
         .then(() => options.onIncomingRequest(msg))
         .then(
-          (payload) => sendFrame({ requestId: msg.id, payload: payload ?? { status: "ok" } }),
+          (result) => sendFrame(buildResponseFrame(msg.id, result)),
           (e) => sendFrame({ requestId: msg.id,
                              payload: { status: "error", message: e?.message ?? String(e) } }),
         );
@@ -251,6 +258,23 @@ export function startWebSocketClient(options) {
       return;
     }
     log("unknown frame shape", msg);
+  }
+
+  // Build the response wire frame from whatever `onIncomingRequest'
+  // returned.  Envelope shape `{ payload, __timing }' is unpacked so
+  // `__timing' sits alongside `payload' on the wire, not nested inside
+  // it.  Any other shape is treated as the payload itself.
+  function buildResponseFrame(requestId, result) {
+    if (result
+        && typeof result === "object"
+        && !Array.isArray(result)
+        && Object.prototype.hasOwnProperty.call(result, "__timing")
+        && Object.prototype.hasOwnProperty.call(result, "payload")) {
+      return { requestId,
+               payload:   result.payload ?? { status: "ok" },
+               __timing:  result.__timing };
+    }
+    return { requestId, payload: result ?? { status: "ok" } };
   }
 
   function sendFrame(obj) {

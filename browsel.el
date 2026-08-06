@@ -165,6 +165,25 @@ browser by passing an explicit CLIENT to the helpers."
 (defvar browsel-debug nil
   "When non-nil, log every WebSocket frame to *browsel* buffer.")
 
+(defvar browsel-debug-timing nil
+  "When non-nil, log per-stage latency breakdown for every slow request.
+Uses timing stamps attached to Chrome responses by the extension (see
+`ai/slow-random-response-time.md').  A request is considered slow when
+its total wall-clock time exceeds `browsel-slow-request-threshold'.
+When the flag is nil the advice still fires the slow-line message on
+slow requests but omits the per-stage breakdown.")
+
+(defvar browsel-slow-request-threshold 0.5
+  "Seconds above which `browsel-request' logs a slow-line to *Messages*.
+Set to a small positive number to catch outliers; set to nil to
+suppress the slow-line entirely.")
+
+(defvar browsel--last-response-timing nil
+  "Timing plist from the most recent WebSocket response frame.
+Populated by `browsel--handle-response' from the wire-level
+`:__timing' field (see `ai/slow-random-response-time.md').  Read by
+`browsel--timing-advice'; not part of the public API.")
+
 (defvar browsel-pandoc-executable "pandoc"
   "Path to the pandoc executable used for HTML → org conversion.
 Shared by browsel-www and browsel-chatgpt backends.")
@@ -572,6 +591,11 @@ If no pending callback matches (likely already timed out), surfaces a warning."
         (setq browsel--pending-callbacks
               (cl-remove-if (lambda (c) (equal (car c) id))
                             browsel--pending-callbacks))
+        ;; Stash the wire-level :__timing (Chrome-only, may be nil) so
+        ;; the sync `browsel-request' path can hand it to
+        ;; `browsel--timing-advice' after the callback returns.
+        ;; See ai/slow-random-response-time.md.
+        (setq browsel--last-response-timing (plist-get msg :__timing))
         (condition-case err
             (funcall callback (plist-get msg :payload))
           (error
@@ -1079,6 +1103,73 @@ roster."
                  (accept-process-output nil 0.05)
                  (pump)))))
           (pump))))))
+
+;; ── Diagnostic timing advice ─────────────────────────────────────────────────
+;;
+;; Diagnostic scaffolding for the intermittent multi-second stalls
+;; documented in ai/slow-random-response-time.md.  The advice is
+;; installed unconditionally but only emits a *Messages* line when the
+;; observed wall-clock time exceeds `browsel-slow-request-threshold'.
+;; When `browsel-debug-timing' is non-nil AND the extension attached a
+;; `:__timing' plist to the response frame, a per-stage breakdown is
+;; appended so latency can be attributed to WS transport, offscreen
+;; -> SW hop, in-SW dispatch, chrome.* API, or return trip.
+;;
+;; Revert plan (see slow-random-response-time.md): delete
+;; `browsel-debug-timing', `browsel-slow-request-threshold',
+;; `browsel--last-response-timing', `browsel--format-timing-deltas',
+;; `browsel--timing-advice', and the `advice-add' call below; drop the
+;; matching setq in `browsel--handle-response'.
+
+(defun browsel--format-timing-deltas (t0-float timing dt-total)
+  "Return a one-line per-stage breakdown for TIMING or nil.
+T0-FLOAT is the pre-send `float-time' (seconds).  TIMING is the plist
+extracted from the response's `:__timing' field (`:t1' .. `:t4'
+in `Date.now' milliseconds; a Chrome-only field, may be nil).
+DT-TOTAL is the total wall-clock seconds already measured by the
+caller; the return-trip delta is derived as dt-total minus the
+sum of the other deltas so all five sum to the observed total."
+  (when timing
+    (let* ((t0-ms (* 1000.0 t0-float))
+           (t1    (plist-get timing :t1))
+           (t2    (plist-get timing :t2))
+           (t3    (plist-get timing :t3))
+           (t4    (plist-get timing :t4)))
+      (when (and (numberp t1) (numberp t2) (numberp t3) (numberp t4))
+        (let* ((d-ws       (max 0 (- t1 t0-ms)))       ; t1 - t0
+               (d-hop      (max 0 (- t2 t1)))          ; t2 - t1
+               (d-dispatch (max 0 (- t3 t2)))          ; t3 - t2
+               (d-api      (max 0 (- t4 t3)))          ; t4 - t3
+               (d-return   (max 0 (- (* 1000.0 dt-total)
+                                     (+ d-ws d-hop d-dispatch d-api)))))
+          (format "[ws=%.0fms hop=%.0fms disp=%.0fms api=%.0fms ret=%.0fms]"
+                  d-ws d-hop d-dispatch d-api d-return))))))
+
+(defun browsel--timing-advice (orig name &rest args)
+  "Around advice on `browsel-request' that logs slow requests.
+ORIG is the original function, NAME the request name, ARGS the
+remaining args.  See ai/slow-random-response-time.md."
+  (let ((t0 (float-time))
+        ;; Clear before the call so a stale value from a prior request
+        ;; cannot leak into this one's breakdown.
+        (browsel--last-response-timing nil))
+    (unwind-protect
+        (let ((result (apply orig name args)))
+          (let* ((dt        (- (float-time) t0))
+                 (threshold browsel-slow-request-threshold)
+                 (slow?     (and (numberp threshold) (> dt threshold))))
+            (when slow?
+              (let ((breakdown (and browsel-debug-timing
+                                    (browsel--format-timing-deltas
+                                     t0 browsel--last-response-timing dt))))
+                (message "[browsel slow] %s took %.3fs @ %s%s"
+                         name dt (format-time-string "%FT%T")
+                         (if breakdown (concat " " breakdown) ""))))
+            result))
+      ;; Ensure the stash does not linger past this call even on error.
+      (setq browsel--last-response-timing nil))))
+
+(advice-add 'browsel-request :around #'browsel--timing-advice)
 
 ;; ── Convenience: respond-fast-then-defer ─────────────────────────────────────
 

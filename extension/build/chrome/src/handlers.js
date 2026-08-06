@@ -287,7 +287,7 @@ function pickArgs(handler, payload) {
   return {};
 }
 
-export async function dispatchEmacsRequest(request, handlers) {
+export async function dispatchEmacsRequest(request, handlers, timingOut) {
   const { name, payload } = request;
   const handler = (handlers ?? []).find((h) => h.name === name);
   if (!handler) {
@@ -299,11 +299,17 @@ export async function dispatchEmacsRequest(request, handlers) {
     if (!adapter) {
       throw new Error(`unknown args-shape: ${handler["args-shape"]}`);
     }
+    // See ai/slow-random-response-time.md.  `t3' is captured just
+    // before the resolved handler runs; the caller stamps `t4' after
+    // this function resolves.  Delta `t4 - t3' isolates the actual
+    // chrome.* API call from surrounding dispatch overhead.
+    if (timingOut) timingOut.t3 = Date.now();
     return await adapter(payload, handler);
   }
 
   const fn   = resolveApi(handler.api);
   const args = pickArgs(handler, payload);
+  if (timingOut) timingOut.t3 = Date.now();
   // chrome.* APIs in MV3 return promises directly.
   const result = await fn(args);
   return result === undefined ? { status: "ok" } : result;

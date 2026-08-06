@@ -258,9 +258,9 @@ export function setWsStatus(next) {
 
 // ── Incoming-request dispatch (Emacs → browser) ─────────────────────────────
 
-export async function dispatchIncomingEmacsRequest(request) {
+export async function dispatchIncomingEmacsRequest(request, timingOut) {
   const config = await ensureConfig();
-  return await dispatchEmacsRequest(request, config.handlers ?? []);
+  return await dispatchEmacsRequest(request, config.handlers ?? [], timingOut);
 }
 
 // ── runtime.onMessage switch (popup + content scripts) ──────────────────────

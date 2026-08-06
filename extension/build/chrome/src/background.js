@@ -123,13 +123,36 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
 
     case "WS_REQUEST": {
+      // See ai/slow-random-response-time.md.  Timing stamps ride
+      // alongside every response so the Emacs-side advice can
+      // attribute wall-clock cost to a specific stage (WS transport,
+      // SW hop, dispatch, chrome.* API, return trip).
+      //   t1: WS onmessage in offscreen (from `msg.t1')
+      //   t2: SW `onMessage' entry (here)
+      //   t3: pre chrome.* call (in dispatchEmacsRequest)
+      //   t4: post chrome.* call (here, after dispatch resolves)
+      // Emacs stamps t0 (pre-send) and t5 (post-receive).
+      //
+      // Returned as { payload, __timing } envelope rather than merged
+      // into the payload itself, because payloads may be arrays or
+      // scalars (e.g. GET_ALL_TABS returns a tabs array).  Object
+      // spread on an array corrupts the shape; the envelope avoids
+      // that.  ws-client.js unpacks the envelope back onto the wire
+      // as sibling fields.
+      const timing = { t1: msg.t1, t2: Date.now() };
       Promise.resolve()
-        .then(() => dispatchIncomingEmacsRequest(msg.request))
+        .then(() => dispatchIncomingEmacsRequest(msg.request, timing))
         .then(
-          (payload) => sendResponse(payload),
+          (payload) => {
+            timing.t4 = Date.now();
+            sendResponse({ payload: payload ?? { status: "ok" }, __timing: timing });
+          },
           (e) => {
+            timing.t4 = Date.now();
             log("emacs request failed:", e);
-            sendResponse({ status: "error", message: e?.message ?? String(e) });
+            sendResponse({ payload: { status: "error",
+                                      message: e?.message ?? String(e) },
+                           __timing: timing });
           },
         );
       return true;

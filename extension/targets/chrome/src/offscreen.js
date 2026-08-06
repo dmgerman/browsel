@@ -24,9 +24,15 @@ function log(...args) { console.log("[offscreen]", ...args); }
 // duplicating that, and the SW is alive whenever a frame arrives
 // (the WebSocket message wakes it).
 function dispatchIncomingViaServiceWorker(request) {
+  // See ai/slow-random-response-time.md.  `t1' marks the moment the
+  // incoming request is observed at the offscreen document — the
+  // earliest point the extension code can see it.  Forwarded to the
+  // SW so `t2 - t1' isolates the offscreen -> SW hop (SW cold-start
+  // signature).
+  const t1 = Date.now();
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage(
-      { target: "service-worker", type: "WS_REQUEST", request },
+      { target: "service-worker", type: "WS_REQUEST", request, t1 },
       (response) => {
         if (chrome.runtime.lastError) {
           reject(new Error(chrome.runtime.lastError.message));
